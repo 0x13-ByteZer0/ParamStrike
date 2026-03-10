@@ -1104,7 +1104,7 @@ fn processar_domain_unico(domain: &str) {
     println!("\n{}[*] Iniciando filtragem de URLs{}\n", BLUE, RESET);
     
     // Filtra as URLs
-    if let Err(e) = filtrar_urls(urls_file, &resultado_file, false, false, false, false, OLLAMA_MODEL_DEFAULT, None) {
+    if let Err(e) = filtrar_urls(urls_file, &resultado_file, false, false, false, false, OLLAMA_MODEL_DEFAULT, None, None) {
         eprintln!("{}[âœ—] Erro ao filtrar URLs: {}{}", RED, e, RESET);
         process::exit(1);
     }
@@ -1143,7 +1143,7 @@ fn processar_lista_dominios(arquivo_subs: &str) {
     println!("\n{}[*] Iniciando filtragem de URLs{}\n", BLUE, RESET);
     
     // Filtra as URLs
-    if let Err(e) = filtrar_urls(urls_file, resultado_file, false, false, false, false, OLLAMA_MODEL_DEFAULT, None) {
+    if let Err(e) = filtrar_urls(urls_file, resultado_file, false, false, false, false, OLLAMA_MODEL_DEFAULT, None, None) {
         eprintln!("{}[âœ—] Erro ao filtrar URLs: {}{}", RED, e, RESET);
         process::exit(1);
     }
