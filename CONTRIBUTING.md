@@ -126,6 +126,55 @@ Add suporte a filtro por padrão regex para parâmetros.
 Closes #42
 ```
 
+## Versionamento Semântico
+
+ParamStrike usa [Semantic Versioning](https://semver.org) com incremento automático:
+
+- **MAJOR.MINOR.PATCH** (e.g., 1.0.0)
+- **MAJOR**: Mudanças incompatíveis com versões anteriores
+- **MINOR**: Novas funcionalidades compatíveis
+- **PATCH**: Correções de bugs
+
+### Incremento Automático
+
+Quando você executa `paramstrike -up`:
+1. Faz `git pull` do repositório
+2. Compila com `cargo build --release`
+3. **Incrementa automaticamente MINOR** (1.0.0 → 1.1.0)
+4. Atualiza `VERSION` e `.version`
+
+### Ao Contribuir
+
+- **Não altere manualmente** `VERSION` ou `.version`
+- Essas mudanças são automatizadas pelo `-up`
+- Seu PR não deve incluir mudanças de versão
+
+**Mantis:**
+- `VERSION` - Arquivo do repositório (versionamento oficial)
+- `.version` - Arquivo local do usuário (cache local)
+- `const VERSION` - Constante em main.rs (fallback)
+
+### Atualizando CHANGELOG
+
+Para cada novo PR que adicione features:
+1. Atualize `CHANGELOG.md` com:
+   - Qual versão (planejamos X.Y.Z)
+   - Descrição da mudança
+   - Categoria (Added, Changed, Fixed, etc)
+
+```markdown
+## [X.Y.Z] - Data
+
+### Added
+- ✨ Nova feature com emoji descriitivo
+
+### Changed
+- 🔄 Mudança em feature existente
+
+### Fixed  
+- ✅ Bug corrigido
+```
+
 ## Padrões de Desenvolvimento
 
 ### Estilo de Código

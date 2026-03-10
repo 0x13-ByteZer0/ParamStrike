@@ -4,7 +4,7 @@
 
 ![Rust](https://img.shields.io/badge/Rust-1.70%2B-orange?logo=rust&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-blue)
-![Version](https://img.shields.io/badge/Version-1.0.0-brightgreen)
+![Version](https://img.shields.io/badge/Version-1.1.0-brightgreen)
 ![Status](https://img.shields.io/badge/Status-Active-success)
 
 **Uma ferramenta poderosa e rápida para extração de parâmetros de URL e reconhecimento web**
@@ -38,6 +38,11 @@
 - 💾 **Saída Configurável**: Especifique arquivo de saída personalizado
 - 🖥️ **CLI Intuitiva**: Flags simples e help integrado
 - 🌈 **Colorização ANSI**: Melhor legibilidade do output
+- ✅ **Verificação de Status HTTP**: Categoriza URLs por status (2xx, 3xx, 4xx, 5xx)
+- 🔄 **Auto-Update**: Atualiza do Git e recompila automaticamente
+- 📦 **Versionamento Automático**: Incrementa versão a cada atualização
+- 🔍 **Verbose Mode**: Acompanhe o processamento em detalhes
+- 🎨 **Status Visual**: Mostra se há atualizações disponíveis
 
 ---
 
@@ -82,7 +87,10 @@ paramstrike [OPÇÃO] [ARGUMENTOS]
 | `-o` | `<arquivo>` | Arquivo de saída (padrão: `urls_parametros.txt`) |
 | `-d` | `<domínio>` | Domínio único - executa subfinder, katana e urlfinder |
 | `-f` | `<arquivo>` | Arquivo com lista de subdomínios para crawler |
-| `-h, --help` | - | Mostra menssagem de ajuda |
+| `-v, --verbose` | - | Modo verbose (mostra fluxo de processamento detalhado) |
+| `-status` | - | Verifica status HTTP e salva URLs em arquivos separados (2xx, 3xx, 4xx, 5xx) |
+| `-up, --update` | - | Atualiza a ferramenta do Git e recompila automaticamente |
+| `-h, --help` | - | Mostra mensagem de ajuda |
 
 ### Modos de Operação
 
@@ -132,22 +140,70 @@ paramstrike -f subdomains.txt
 paramstrike -l urls.txt -o parametros.txt
 ```
 
-### Exemplo 2: Extrair parâmetros de um domínio único
+### Exemplo 2: Filtrar com modo verbose
+
+```bash
+paramstrike -l urls.txt -o parametros.txt -v
+```
+
+### Exemplo 3: Verificar status HTTP das URLs
+
+```bash
+paramstrike -l urls.txt -o parametros.txt -status
+```
+
+Gera arquivos separados:
+- `parametros_2xx_sucessos.txt` - URLs com status 200-299
+- `parametros_3xx_redirecionamentos.txt` - URLs com status 300-399
+- `parametros_4xx_erros_cliente.txt` - URLs com status 400-499
+- `parametros_5xx_erros_servidor.txt` - URLs com status 500-599
+
+### Exemplo 4: Combinar verbose e status
+
+```bash
+paramstrike -l urls.txt -o parametros.txt -v -status
+```
+
+### Exemplo 5: Extrair parâmetros de um domínio único
 
 ```bash
 paramstrike -d example.com
 ```
 
-### Exemplo 3: Processar múltiplos subdomínios
+Automáticamente executa:
+1. `subfinder -d example.com -all` - Encontra subdomínios
+2. `katana -list subdomínios.txt` - Crawla os subdomínios
+3. `urlfinder -i subdomínios.txt` - Extrai URLs adicionais
+4. Filtra e salva em `example.com_urls_filtradas.txt`
+
+### Exemplo 6: Processar múltiplos subdomínios
 
 ```bash
 paramstrike -f meus_subdomios.txt
 ```
 
-### Exemplo 4: Usar arquivo de entrada e saída personalizado
+### Exemplo 7: Atualizar a ferramenta
 
 ```bash
-paramstrike -l entrada.txt -o saida_customizada.txt
+paramstrike -up
+```
+
+Automaticamente:
+1. Faz `git pull` do repositório
+2. Compila com `cargo build --release`
+3. Incrementa a versão (1.0.0 → 1.1.0)
+4. Salva a nova versão
+
+### Exemplo 8: Ver versão atual e status
+
+```bash
+paramstrike -h
+```
+
+Mostra:
+- Banner com versão
+- Status de atualização (ATUALIZADA ou DESATUALIZADA)
+- Menu de ajuda
 ```
 
 ---

@@ -23,12 +23,40 @@ cargo build --release
 - **Modo -l**: Filtra URLs de um arquivo de entrada
 - **Modo -d**: Executa recon em um domínio único
 - **Modo -f**: Processa múltiplos subdomínios
+- **Flag -v**: Modo verbose (mostra detalhes do processamento)
+- **Flag -status**: Verifica HTTP e categoriza por código
+- **Flag -up**: Atualiza a ferramenta automaticamente
 
 ### P: Como faço para não remover certas extensões?
 **R:** Edite a constante `EXTENSOES_REMOVER` no `src/main.rs` e recompile.
 
 ### P: Posso usar com outputs de outras ferramentas?
 **R:** Sim! Qualquer arquivo com uma URL por linha funciona.
+
+### P: Para que serve a flag -v (verbose)?
+**R:** Mostra cada URL processada, por que foram removidas, e progresso em tempo real. Útil para debug.
+
+### P: Para que serve a flag -status?
+**R:** Verifica o status HTTP (200, 404, 500, etc) de cada URL e salva em arquivos separados:
+- `resultado_2xx_sucessos.txt`
+- `resultado_3xx_redirecionamentos.txt`
+- `resultado_4xx_erros_cliente.txt`
+- `resultado_5xx_erros_servidor.txt`
+
+### P: Como atualizo o ParamStrike?
+**R:** Execute simplesmente:
+```bash
+paramstrike -up
+```
+Ele vai fazer `git pull`, recompilar e incrementar a versão automaticamente.
+
+### P: Como vejo qual versão estou usando?
+**R:** Execute qualquer comando, a versão aparece no banner:
+```bash
+paramstrike -h
+```
+
+Mostra se está "ATUALIZADO" ou "DESATUALIZADO".
 
 ## Performance & Troubleshooting
 

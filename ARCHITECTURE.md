@@ -5,34 +5,63 @@
 ParamStrike é uma ferramenta CLI baseada em Rust para extração e análise de parâmetros de URL. A arquitetura é simples, direta e focada em performance.
 
 ```
-┌─────────────────────────────────────────────────┐
-│           Usuario (CLI)                          │
-├─────────────────────────────────────────────────┤
-│      Camada de Entrada (Argumentos)             │
-│  (parse args, validação, roteamento)            │
-├──────────┬──────────────┬────────────┬──────────┤
-│  Modo -l │  Modo -d     │ Modo -f    │ Help    │
-│ (filtro) │  (reconnoissance) │(batch) │      │
-├─────────────────────────────────────────────────┤
-│        Núcleo de Processamento                  │
-│  - Leitura de arquivos                          │
-│  - Parsing de URLs                              │
-│  - Filtro de extensões                          │
-│  - Normalização de parâmetros                   │
-├─────────────────────────────────────────────────┤
-│        Camada de Saída                           │
-│  - Formatação de output                         │
-│  - Escrita em arquivo                           │
-│  - Feedback colorido (ANSI)                     │
-├─────────────────────────────────────────────────┤
-│           Arquivo de Saída (TXT)                │
-└─────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────┐
+│        Verificação de Versão (AUTOMÁTICA)         │
+│  (Compara VERSION vs .version local)              │
+├────────────────────────────────────────────────────┤
+│           Usuario (CLI)                            │
+├────────┬────────┬──────────┬────────┬──────────────┤
+│ -h     │ -up    │   -l     │   -d   │ -f           │
+│(help)  │(update)│(filtro)  │(single)│(batch)       │
+├────────┴────────┼──────────┴────────┴──────────────┤
+│                 │                                   │
+│         Núcleo de Processamento                    │
+│  ├─ Leitura de arquivos (BufReader)               │
+│  ├─ Parsing de URLs                                │
+│  ├─ Filtro de extensões (30+)                     │
+│  ├─ Detecção de parâmetros                        │
+│  ├─ Verificação de status HTTP (curl)             │
+│  └─ Normalização                                   │
+├──────────────────────────────────────────────────────┤
+│      Categorização (se -status)                     │
+│  ├─ 2xx_sucessos.txt                              │
+│  ├─ 3xx_redirecionamentos.txt                   │
+│  ├─ 4xx_erros_cliente.txt                         │
+│  ├─ 5xx_erros_servidor.txt                        │
+│  └─ _sem_resposta.txt                             │
+├──────────────────────────────────────────────────────┤
+│        Camada de Saída (BufWriter)                  │
+│  ├─ Deduplicação com anew                         │
+│  ├─ Formatação de output                          │
+│  ├─ Feedback colorido (ANSI)                      │
+│  └─ Atualização de versão (se -up)                │
+├──────────────────────────────────────────────────────┤
+│           Arquivos de Saída                         │
+│  ├─ resultado.txt (ou -o customizado)             │
+│  ├─ VERSION (versionamento)                       │
+│  └─ .version (local cache)                        │
+└──────────────────────────────────────────────────────┘
 ```
 
 ## Componentes Principais
 
+### 0. Sistema de Versionamento (Novo em v1.1.0)
+
+```rust
+verificar_atualizacoes()          // Compara versões
+├─ ler_versao_salva()            // Lê .version local
+├─ incrementar_versao()          // 1.0.0 → 1.1.0
+└─ salvar_versao()               // Escreve .version
+
+atualizar_ferramenta()           // Flag -up
+├─ git pull
+├─ cargo build --release
+└─ incrementar_versao()
+```
+
 ### 1. main()
 Função principal que:
+- **Sempre** verifica versão (ANTES de qualquer operação)
 - Processa argumentos da CLI
 - Determina qual modo executar
 - Valida entradas
@@ -45,10 +74,25 @@ Função principal que:
 -o <arquivo>      // Saída customizada
 -d <dominio>      // Domínio único
 -f <arquivo>      // Batch
+-v, --verbose     // Modo verbose
+-status           // Verifica HTTP
+-up, --update     // Update automático
 -h, --help        // Ajuda
 ```
 
 ### 3. Módulos de Processamento
+
+#### `verificar_atualizacoes()`
+- Compara `VERSION` (arquivo) com `.version` (local)
+- Mostra box amarelo se desatualizado
+- Mostra box verde se atualizado
+- Executa SEMPRE no startup
+
+#### `atualizar_ferramenta()` e `incrementar_versao()`
+- Executa `git pull`
+- Compila com `cargo build --release`
+- Incrementa versão semântica
+- Guarda em `.version` e `VERSION`
 
 #### `processar_argumentos()`
 - Extrai flags `-l` e `-o`
@@ -61,12 +105,21 @@ Função principal que:
 - Processa cada URL:
   - Extrai parâmetros
   - Filtra extensões
+  - Quando `-status`: verifica HTTP
   - Normaliza valores
-- Escreve resultado em arquivo
+- **Novo**: Categoriza por status HTTP
+- Escreve resultado com `anew` (deduplicação)
+
+#### `verificar_status_http()` (Novo em v1.1.0)
+- Usa curl com timeout 5s
+- Retorna código HTTP
+- Categoriza: 2xx, 3xx, 4xx, 5xx
+- Integrado com `-status` flag
 
 #### `processar_domain_unico()`
 - Integração com ferramentas externas
-- Executa: subfinder → katana → urlfinder
+- **Novo**: Subfinder agora com `-all`
+- Executa: subfinder -d domain -all → katana → urlfinder
 - Agrega outputs
 
 #### `processar_lista_dominios()`
@@ -77,11 +130,13 @@ Função principal que:
 - **BufReader**: Leitura eficiente de arquivos
 - **BufWriter**: Escrita em buffer (performance)
 - **File**: Operações de sistema de arquivos
+- **anew**: Deduplicação de URLs
 
 ### 5. Módulo de Formatação
 - **ANSI Colors**: Cores para terminal
-- **Banner**: Logo ASCII do projeto
+- **Banner**: Logo ASCII com versão
 - **Help**: Mensagem de ajuda formatada
+- **Boxes**: Formatação de mensagens (novo v1.1.0)
 
 ## Fluxo de Dados - Modo Padrão (Modo -l)
 
