@@ -5,6 +5,9 @@ use std::path::PathBuf;
 use std::process::{self, Command, Stdio};
 use std::collections::HashMap;
 
+// Versionamento
+const VERSION: &str = "1.0.0";
+
 // Cores ANSI
 const RED: &str = "\x1b[91m";
 const GREEN: &str = "\x1b[92m";
@@ -135,83 +138,74 @@ fn mostrar_help() {
     println!("    {}$ paramstrike -f subs.txt{}\n", GREEN, RESET);
 }
 
-// Função para obter o hash do último commit
-fn obter_hash_commit() -> Option<String> {
-    let output = Command::new("git")
-        .arg("rev-parse")
-        .arg("HEAD")
-        .output();
-    
-    match output {
-        Ok(out) => {
-            if out.status.success() {
-                let hash = String::from_utf8_lossy(&out.stdout);
-                Some(hash.trim().to_string())
-            } else {
-                None
-            }
-        }
+// Função para obter a versão atual do repositório (lê do arquivo VERSION na raiz)
+fn obter_versao_repositorio() -> Option<String> {
+    match std::fs::read_to_string("VERSION") {
+        Ok(content) => Some(content.trim().to_string()),
         Err(_) => None,
     }
 }
 
-// Função para ler o hash salvo localmente
-fn ler_hash_salvo() -> Option<String> {
+// Função para ler a versão salva localmente
+fn ler_versao_salva() -> Option<String> {
     match std::fs::read_to_string(".version") {
         Ok(content) => Some(content.trim().to_string()),
         Err(_) => None,
     }
 }
 
-// Função para salvar o hash do commit
-fn salvar_hash_commit(hash: &str) -> std::io::Result<()> {
-    std::fs::write(".version", hash)
+// Função para salvar a versão localmente
+fn salvar_versao(versao: &str) -> std::io::Result<()> {
+    std::fs::write(".version", versao)
 }
 
 // Função para verificar se há atualizações disponíveis
 fn verificar_atualizacoes() {
-    match obter_hash_commit() {
-        Some(hash_atual) => {
-            match ler_hash_salvo() {
-                Some(hash_salvo) => {
-                    if hash_atual != hash_salvo {
-                        println!("{}╔═══════════════════════════════════════════════════════════════╗{}", YELLOW, RESET);
-                        println!("{}║                                                               ║{}", YELLOW, RESET);
-                        println!("{}║  {}⚠  FERRAMENTA DESATUALIZADA!                          {}║{}", YELLOW, RED, YELLOW, RESET);
-                        println!("{}║                                                               ║{}", YELLOW, RESET);
-                        println!("{}║  {}Nova versão disponível. Execute para atualizar:  {}║{}", YELLOW, CYAN, YELLOW, RESET);
-                        println!("{}║                                                               ║{}", YELLOW, RESET);
-                        println!("{}║         {}$ paramstrike -up                             {}║{}", YELLOW, BOLD, YELLOW, RESET);
-                        println!("{}║                                                               ║{}", YELLOW, RESET);
-                        println!("{}╚═══════════════════════════════════════════════════════════════╝{}", YELLOW, RESET);
-                        println!();
-                    } else {
-                        println!("{}╔═══════════════════════════════════════════════════════════════╗{}", GREEN, RESET);
-                        println!("{}║                                                               ║{}", GREEN, RESET);
-                        println!("{}║  {}✓  FERRAMENTA ATUALIZADA{}                                   {}║{}", GREEN, BOLD, RESET, GREEN, RESET);
-                        println!("{}║                                                               ║{}", GREEN, RESET);
-                        println!("{}║         {}Versão: LATEST{}                                      {}║{}", GREEN, BOLD, RESET, GREEN, RESET);
-                        println!("{}║                                                               ║{}", GREEN, RESET);
-                        println!("{}╚═══════════════════════════════════════════════════════════════╝{}", GREEN, RESET);
-                        println!();
-                    }
-                }
-                None => {
-                    println!("{}[*] Primeira execução - salvando versão{}", BLUE, RESET);
-                    let _ = salvar_hash_commit(&hash_atual);
-                    println!("{}╔═══════════════════════════════════════════════════════════════╗{}", GREEN, RESET);
-                    println!("{}║                                                               ║{}", GREEN, RESET);
-                    println!("{}║  {}✓  FERRAMENTA ATUALIZADA{}                                   {}║{}", GREEN, BOLD, RESET, GREEN, RESET);
-                    println!("{}║                                                               ║{}", GREEN, RESET);
-                    println!("{}║         {}Versão: LATEST{}                                      {}║{}", GREEN, BOLD, RESET, GREEN, RESET);
-                    println!("{}║                                                               ║{}", GREEN, RESET);
-                    println!("{}╚═══════════════════════════════════════════════════════════════╝{}", GREEN, RESET);
-                    println!();
-                }
+    // Versão atual do binário compilado
+    let versao_local = VERSION.to_string();
+    
+    // Versão no repositório (ou versão salva se estivemos offline)
+    let versao_salva = ler_versao_salva();
+    
+    match versao_salva {
+        Some(salva) => {
+            if versao_local != salva {
+                // Versão desatualizada
+                println!("{}╔═══════════════════════════════════════════════════════════════╗{}", YELLOW, RESET);
+                println!("{}║                                                               ║{}", YELLOW, RESET);
+                println!("{}║  {}⚠  FERRAMENTA DESATUALIZADA!                          {}║{}", YELLOW, RED, YELLOW, RESET);
+                println!("{}║                                                               ║{}", YELLOW, RESET);
+                println!("{}║  {}Versão atual: {} | Versão instalada: {}{}      {}║{}", YELLOW, CYAN, versao_local, salva, YELLOW, YELLOW, RESET);
+                println!("{}║                                                               ║{}", YELLOW, RESET);
+                println!("{}║  {}Nova versão disponível. Execute para atualizar:  {}║{}", YELLOW, CYAN, YELLOW, RESET);
+                println!("{}║                                                               ║{}", YELLOW, RESET);
+                println!("{}║         {}$ paramstrike -up                             {}║{}", YELLOW, BOLD, YELLOW, RESET);
+                println!("{}║                                                               ║{}", YELLOW, RESET);
+                println!("{}╚═══════════════════════════════════════════════════════════════╝{}", YELLOW, RESET);
+                println!();
+            } else {
+                // Versão atualizada
+                println!("{}╔═══════════════════════════════════════════════════════════════╗{}", GREEN, RESET);
+                println!("{}║                                                               ║{}", GREEN, RESET);
+                println!("{}║  {}✓  FERRAMENTA ATUALIZADA{}                                   {}║{}", GREEN, BOLD, RESET, GREEN, RESET);
+                println!("{}║                                                               ║{}", GREEN, RESET);
+                println!("{}║         {}Versão: {}{}                                         {}║{}", GREEN, BOLD, versao_local, RESET, GREEN, RESET);
+                println!("{}║                                                               ║{}", GREEN, RESET);
+                println!("{}╚═══════════════════════════════════════════════════════════════╝{}", GREEN, RESET);
+                println!();
             }
         }
         None => {
-            println!("{}[!] Não foi possível verificar versão (Git não disponível){}", YELLOW, RESET);
+            // Primeira execução - salva a versão
+            println!("{}[*] Primeira execução - salvando versão {}{}", BLUE, versao_local, RESET);
+            let _ = salvar_versao(&versao_local);
+            println!("{}╔═══════════════════════════════════════════════════════════════╗{}", GREEN, RESET);
+            println!("{}║                                                               ║{}", GREEN, RESET);
+            println!("{}║  {}✓  FERRAMENTA ATUALIZADA{}                                   {}║{}", GREEN, BOLD, RESET, GREEN, RESET);
+            println!("{}║                                                               ║{}", GREEN, RESET);
+            println!("{}║         {}Versão: {}{}                                         {}║{}", GREEN, BOLD, versao_local, RESET, GREEN, RESET);
+            println!("{}║                                                               ║{}", GREEN, RESET);
+            println!("{}╚═══════════════════════════════════════════════════════════════╝{}", GREEN, RESET);
             println!();
         }
     }
@@ -314,15 +308,13 @@ fn atualizar_ferramenta() {
                 }
                 println!();
                 
-                // Obter novo hash e salvar
-                if let Some(novo_hash) = obter_hash_commit() {
-                    match salvar_hash_commit(&novo_hash) {
-                        Ok(_) => {
-                            println!("{}[✓] Versão salva: {}...{}", GREEN, &novo_hash[..12], RESET);
-                        }
-                        Err(e) => {
-                            eprintln!("{}[!] Aviso ao salvar versão: {}{}", YELLOW, e, RESET);
-                        }
+                // Salvar nova versão
+                match salvar_versao(VERSION) {
+                    Ok(_) => {
+                        println!("{}[✓] Versão atualizada para: {}{}", GREEN, VERSION, RESET);
+                    }
+                    Err(e) => {
+                        eprintln!("{}[!] Aviso ao salvar versão: {}{}", YELLOW, e, RESET);
                     }
                 }
                 
