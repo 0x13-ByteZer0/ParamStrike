@@ -40,7 +40,7 @@ cargo --version
 cargo build
 ```
 
-Executável em: `target/debug/filter_master` (ou `.exe` no Windows)
+Executável em: `target/debug/paramstrike` (ou `.exe` no Windows)
 
 ### Build para Release
 
@@ -48,7 +48,7 @@ Executável em: `target/debug/filter_master` (ou `.exe` no Windows)
 cargo build --release
 ```
 
-Executável em: `target/release/filter_master`
+Executável em: `target/release/paramstrike`
 
 ### Executar Testes
 
@@ -202,11 +202,11 @@ Instale a extensão [CodeLLDB](https://marketplace.visualstudio.com/items?itemNa
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=filter_master",
-                    "--package=filter_master"
+                    "--bin=paramstrike",
+                    "--package=paramstrike"
                 ],
                 "filter": {
-                    "name": "filter_master",
+                    "name": "paramstrike",
                     "kind": "bin"
                 }
             },

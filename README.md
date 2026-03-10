@@ -56,7 +56,7 @@ git clone https://github.com/0x13-ByteZer0/ParamStrike.git
 cd ParamStrike
 cargo build --release
 ```
-Binário em `target/release/filter_master` (ou `.exe` no Windows).
+Binário em `target/release/paramstrike` (ou `.exe` no Windows).
 
 ---
 
