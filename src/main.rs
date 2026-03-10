@@ -159,10 +159,29 @@ fn salvar_versao(versao: &str) -> std::io::Result<()> {
     std::fs::write(".version", versao)
 }
 
+// Função para incrementar a versão semântica (1.0.0 -> 1.1.0)
+fn incrementar_versao(versao: &str) -> String {
+    let partes: Vec<&str> = versao.split('.').collect();
+    if partes.len() == 3 {
+        if let (Ok(major), Ok(mut minor), Ok(patch)) = (
+            partes[0].parse::<u32>(),
+            partes[1].parse::<u32>(),
+            partes[2].parse::<u32>()
+        ) {
+            minor += 1;
+            return format!("{}.{}.{}", major, minor, patch);
+        }
+    }
+    versao.to_string()
+}
+
 // Função para verificar se há atualizações disponíveis
 fn verificar_atualizacoes() {
-    // Versão atual do binário compilado
-    let versao_local = VERSION.to_string();
+    // Lê a versão do arquivo VERSION (source of truth)
+    let versao_local = match std::fs::read_to_string("VERSION") {
+        Ok(content) => content.trim().to_string(),
+        Err(_) => VERSION.to_string(), // fallback para a constante
+    };
     
     // Versão no repositório (ou versão salva se estivemos offline)
     let versao_salva = ler_versao_salva();
@@ -308,13 +327,26 @@ fn atualizar_ferramenta() {
                 }
                 println!();
                 
-                // Salvar nova versão
-                match salvar_versao(VERSION) {
-                    Ok(_) => {
-                        println!("{}[✓] Versão atualizada para: {}{}", GREEN, VERSION, RESET);
-                    }
-                    Err(e) => {
-                        eprintln!("{}[!] Aviso ao salvar versão: {}{}", YELLOW, e, RESET);
+                // Incrementar versão automaticamente
+                if let Some(versao_atual) = ler_versao_salva() {
+                    let nova_versao = incrementar_versao(&versao_atual);
+                    
+                    // Salvar em .version
+                    match salvar_versao(&nova_versao) {
+                        Ok(_) => {
+                            // Salvar também no arquivo VERSION da raiz
+                            match std::fs::write("VERSION", &nova_versao) {
+                                Ok(_) => {
+                                    println!("{}[✓] Versão incrementada: {} → {}{}", GREEN, versao_atual, nova_versao, RESET);
+                                }
+                                Err(e) => {
+                                    eprintln!("{}[!] Aviso ao salvar VERSION: {}{}", YELLOW, e, RESET);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("{}[!] Aviso ao salvar versão: {}{}", YELLOW, e, RESET);
+                        }
                     }
                 }
                 
@@ -510,6 +542,7 @@ fn executar_subfinder(domain: &str, arquivo_saida: &str) -> std::io::Result<()> 
     let output = Command::new("subfinder")
         .arg("-d")
         .arg(domain)
+        .arg("-all")
         .output()?;
     
     if !output.status.success() {
