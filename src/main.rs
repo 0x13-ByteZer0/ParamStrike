@@ -18,24 +18,22 @@ const BOLD: &str = "\x1b[1m";
 fn main() {
     let args: Vec<String> = env::args().collect();
     
+    mostrar_banner();
+    
+    // Verifica se a ferramenta está atualizada - SEMPRE executa
+    verificar_atualizacoes();
+    
     // Verifica se é solicitado help
     if args.contains(&"-h".to_string()) || args.contains(&"--help".to_string()) {
-        mostrar_banner();
         mostrar_help();
         return;
     }
     
     // Verifica se é solicitado update
     if args.contains(&"-up".to_string()) || args.contains(&"--update".to_string()) {
-        mostrar_banner();
         atualizar_ferramenta();
         return;
     }
-    
-    mostrar_banner();
-    
-    // Verifica se a ferramenta está atualizada
-    verificar_atualizacoes();
     
     // Verifica as flags globais
     let verbose = args.contains(&"-v".to_string()) || args.contains(&"--verbose".to_string());
@@ -177,20 +175,37 @@ fn verificar_atualizacoes() {
             match ler_hash_salvo() {
                 Some(hash_salvo) => {
                     if hash_atual != hash_salvo {
-                        println!("{}╔════════════════════════════════════════════╗{}", YELLOW, RESET);
-                        println!("{}║ {}⚠ FERRAMENTA DESATUALIZADA!                {}║{}", YELLOW, RED, YELLOW, RESET);
-                        println!("{}║ {}Execute: paramstrike -up{}                    {}║{}", YELLOW, CYAN, RESET, YELLOW, RESET);
-                        println!("{}╚════════════════════════════════════════════╝{}", YELLOW, RESET);
+                        println!("{}╔═══════════════════════════════════════════════════════════════╗{}", YELLOW, RESET);
+                        println!("{}║                                                               ║{}", YELLOW, RESET);
+                        println!("{}║  {}⚠  FERRAMENTA DESATUALIZADA!                          {}║{}", YELLOW, RED, YELLOW, RESET);
+                        println!("{}║                                                               ║{}", YELLOW, RESET);
+                        println!("{}║  {}Nova versão disponível. Execute para atualizar:  {}║{}", YELLOW, CYAN, YELLOW, RESET);
+                        println!("{}║                                                               ║{}", YELLOW, RESET);
+                        println!("{}║         {}$ paramstrike -up                             {}║{}", YELLOW, BOLD, YELLOW, RESET);
+                        println!("{}║                                                               ║{}", YELLOW, RESET);
+                        println!("{}╚═══════════════════════════════════════════════════════════════╝{}", YELLOW, RESET);
                         println!();
                     } else {
-                        println!("{}[✓] Ferramenta atualizada (latest){}", GREEN, RESET);
+                        println!("{}╔═══════════════════════════════════════════════════════════════╗{}", GREEN, RESET);
+                        println!("{}║                                                               ║{}", GREEN, RESET);
+                        println!("{}║  {}✓  FERRAMENTA ATUALIZADA{}                                   {}║{}", GREEN, BOLD, RESET, GREEN, RESET);
+                        println!("{}║                                                               ║{}", GREEN, RESET);
+                        println!("{}║         {}Versão: LATEST{}                                      {}║{}", GREEN, BOLD, RESET, GREEN, RESET);
+                        println!("{}║                                                               ║{}", GREEN, RESET);
+                        println!("{}╚═══════════════════════════════════════════════════════════════╝{}", GREEN, RESET);
                         println!();
                     }
                 }
                 None => {
                     println!("{}[*] Primeira execução - salvando versão{}", BLUE, RESET);
                     let _ = salvar_hash_commit(&hash_atual);
-                    println!("{}[✓] Ferramenta atualizada (latest){}", GREEN, RESET);
+                    println!("{}╔═══════════════════════════════════════════════════════════════╗{}", GREEN, RESET);
+                    println!("{}║                                                               ║{}", GREEN, RESET);
+                    println!("{}║  {}✓  FERRAMENTA ATUALIZADA{}                                   {}║{}", GREEN, BOLD, RESET, GREEN, RESET);
+                    println!("{}║                                                               ║{}", GREEN, RESET);
+                    println!("{}║         {}Versão: LATEST{}                                      {}║{}", GREEN, BOLD, RESET, GREEN, RESET);
+                    println!("{}║                                                               ║{}", GREEN, RESET);
+                    println!("{}╚═══════════════════════════════════════════════════════════════╝{}", GREEN, RESET);
                     println!();
                 }
             }
@@ -246,10 +261,14 @@ fn verificar_status_http(url: &str) -> Option<u16> {
 
 // Função para atualizar a ferramenta do Git e recompilar
 fn atualizar_ferramenta() {
-    println!("{}[*] Iniciando atualização da ferramenta...\n", BLUE);
+    println!("{}╔═══════════════════════════════════════════════════════════════╗{}", BLUE, RESET);
+    println!("{}║           {}INICIANDO PROCESSO DE ATUALIZAÇÃO{}                       {}║{}", BLUE, BOLD, RESET, BLUE, RESET);
+    println!("{}╚═══════════════════════════════════════════════════════════════╝{}", BLUE, RESET);
+    println!();
     
     // Executa git pull
-    println!("{}[*] Realizando git pull...{}", CYAN, RESET);
+    println!("{}[1/2] Realizando git pull...{}", CYAN, RESET);
+    println!("{}─────────────────────────────────────────────────────────────────{}", MAGENTA, RESET);
     let git_output = Command::new("git")
         .arg("pull")
         .output();
@@ -258,19 +277,19 @@ fn atualizar_ferramenta() {
         Ok(output) => {
             if output.status.success() {
                 let msg = String::from_utf8_lossy(&output.stdout);
-                println!("{}[✓] Git pull concluído!{}", GREEN, RESET);
+                println!("{}✓ Git pull concluído com sucesso!{}", GREEN, RESET);
                 if !msg.trim().is_empty() {
                     println!("{}{}{}", CYAN, msg, RESET);
                 }
             } else {
                 let err = String::from_utf8_lossy(&output.stderr);
-                eprintln!("{}[✗] Erro ao executar git pull:{}", RED, RESET);
+                eprintln!("{}✗ Erro ao executar git pull:{}", RED, RESET);
                 eprintln!("{}{}{}", YELLOW, err, RESET);
                 process::exit(1);
             }
         }
         Err(e) => {
-            eprintln!("{}[✗] Erro ao executar git: {}{}", RED, e, RESET);
+            eprintln!("{}✗ Erro ao executar git: {}{}", RED, e, RESET);
             process::exit(1);
         }
     }
@@ -278,7 +297,8 @@ fn atualizar_ferramenta() {
     println!();
     
     // Executa cargo build --release
-    println!("{}[*] Compilando com cargo...{}", CYAN, RESET);
+    println!("{}[2/2] Compilando com cargo...{}", CYAN, RESET);
+    println!("{}─────────────────────────────────────────────────────────────────{}", MAGENTA, RESET);
     let cargo_output = Command::new("cargo")
         .arg("build")
         .arg("--release")
@@ -287,7 +307,7 @@ fn atualizar_ferramenta() {
     match cargo_output {
         Ok(output) => {
             if output.status.success() {
-                println!("{}[✓] Compilação concluída com sucesso!{}", GREEN, RESET);
+                println!("{}✓ Compilação concluída com sucesso!{}", GREEN, RESET);
                 let msg = String::from_utf8_lossy(&output.stdout);
                 if !msg.trim().is_empty() {
                     println!("{}{}{}", CYAN, msg, RESET);
@@ -298,7 +318,7 @@ fn atualizar_ferramenta() {
                 if let Some(novo_hash) = obter_hash_commit() {
                     match salvar_hash_commit(&novo_hash) {
                         Ok(_) => {
-                            println!("{}[✓] Versão salva: {}{}", GREEN, novo_hash, RESET);
+                            println!("{}[✓] Versão salva: {}...{}", GREEN, &novo_hash[..12], RESET);
                         }
                         Err(e) => {
                             eprintln!("{}[!] Aviso ao salvar versão: {}{}", YELLOW, e, RESET);
@@ -307,10 +327,15 @@ fn atualizar_ferramenta() {
                 }
                 
                 println!();
-                println!("{}╔════════════════════════════════════════════╗{}", BLUE, RESET);
-                println!("{}║ {}{} Ferramenta atualizada e recompilada! {}{}║{}", BLUE, GREEN, BOLD, RESET, BLUE, RESET);
-                println!("{}║ {}{}Latest version{}                           {}║{}", BLUE, GREEN, BOLD, RESET, BLUE, RESET);
-                println!("{}╚════════════════════════════════════════════╝{}", BLUE, RESET);
+                println!("{}╔═══════════════════════════════════════════════════════════════╗{}", BLUE, RESET);
+                println!("{}║                                                               ║{}", BLUE, RESET);
+                println!("{}║  {}✓  ATUALIZAÇÃO CONCLUÍDA COM SUCESSO!{}                     {}║{}", BLUE, GREEN, RESET, BLUE, RESET);
+                println!("{}║                                                               ║{}", BLUE, RESET);
+                println!("{}║         {}→ Versão: LATEST{}                                   {}║{}", BLUE, BOLD, RESET, BLUE, RESET);
+                println!("{}║         {}→ Status: RECOMPILADO{}                              {}║{}", BLUE, BOLD, RESET, BLUE, RESET);
+                println!("{}║                                                               ║{}", BLUE, RESET);
+                println!("{}╚═══════════════════════════════════════════════════════════════╝{}", BLUE, RESET);
+                println!();
             } else {
                 let err = String::from_utf8_lossy(&output.stderr);
                 eprintln!("{}[✗] Erro ao compilar:{}", RED, RESET);
