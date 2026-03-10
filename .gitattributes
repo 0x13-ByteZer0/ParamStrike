@@ -1,0 +1,28 @@
+* text=auto
+* eol=lf
+
+# Git files
+.git* text eol=lf
+.github/ text eol=lf
+
+# Rust files
+*.rs text eol=lf
+Cargo.toml text eol=lf
+Cargo.lock text eol=lf
+
+# Markdown
+*.md text eol=lf
+
+# Code config
+.gitignore text eol=lf
+.editorconfig text eol=lf
+
+# License
+LICENSE text eol=lf
+*.txt text eol=lf
+
+# Binaries
+*.exe binary
+*.dll binary
+*.so binary
+target/ -text

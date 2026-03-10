@@ -1,0 +1,28 @@
+# Rust
+/target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+.env
+.env.local
+
+# Project specific
+*.txt
+!README.md
+.history/
+*.log
+
+# Test outputs
+test_output/
+*.out
