@@ -61,8 +61,20 @@ fn main() {
 
 // Lista de extensões de arquivos a serem removidas
 const EXTENSOES_REMOVER: &[&str] = &[
-    "md", "jpg", "jpeg", "gif", "css", "tif", "tiff", "png", "ttf", "woff",
-    "woff2", "ico", "js", "json",
+    // Imagens
+    "jpg", "jpeg", "gif", "png", "tif", "tiff", "bmp", "svg", "ico", "webp",
+    // Documentos
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "zip", "rar", "7z",
+    // Estilos e Scripts
+    "css", "js", "json", "xml", "yaml", "yml",
+    // Fontes
+    "ttf", "woff", "woff2", "eot", "otf", "font",
+    // Áudio e Vídeo
+    "mp3", "mp4", "avi", "mov", "flv", "wav", "m4a",
+    // Executáveis
+    "exe", "dll", "so", "dylib",
+    // Mapas
+    "map",
 ];
 
 // Função para mostrar o banner
@@ -107,8 +119,11 @@ fn mostrar_help() {
 fn tem_extensao_remover(url: &str) -> bool {
     let url = url.trim().to_lowercase();
     
+    // Extrai só o path, antes dos parâmetros (?)
+    let path = url.split('?').next().unwrap_or(&url);
+    
     for ext in EXTENSOES_REMOVER {
-        if url.ends_with(&format!(".{}", ext)) {
+        if path.ends_with(&format!(".{}", ext)) {
             return true;
         }
     }
