@@ -195,7 +195,7 @@ fn verificar_atualizacoes() {
                 }
             }
         }
-        Err(_) => {
+        None => {
             println!("{}[!] Não foi possível verificar versão (Git não disponível){}", YELLOW, RESET);
             println!();
         }
