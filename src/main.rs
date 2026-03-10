@@ -501,7 +501,7 @@ fn processar_domain_unico(domain: &str) {
     println!("\n{}[*] Iniciando filtragem de URLs{}\n", BLUE, RESET);
     
     // Filtra as URLs
-    if let Err(e) = filtrar_urls(urls_file, &resultado_file) {
+    if let Err(e) = filtrar_urls(urls_file, &resultado_file, false, false) {
         eprintln!("{}[✗] Erro ao filtrar URLs: {}{}", RED, e, RESET);
         process::exit(1);
     }
@@ -540,7 +540,7 @@ fn processar_lista_dominios(arquivo_subs: &str) {
     println!("\n{}[*] Iniciando filtragem de URLs{}\n", BLUE, RESET);
     
     // Filtra as URLs
-    if let Err(e) = filtrar_urls(urls_file, resultado_file) {
+    if let Err(e) = filtrar_urls(urls_file, resultado_file, false, false) {
         eprintln!("{}[✗] Erro ao filtrar URLs: {}{}", RED, e, RESET);
         process::exit(1);
     }
