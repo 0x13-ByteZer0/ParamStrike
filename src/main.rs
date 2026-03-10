@@ -126,17 +126,26 @@ fn filtrar_urls(arquivo_entrada: &str, arquivo_saida: &str) -> std::io::Result<(
     
     let mut urls_filtradas = Vec::new();
     let mut total_urls = 0;
+    let mut linhas_com_erro = 0;
     
     println!("{}[*] Processando arquivo: {}{}", BLUE, arquivo_entrada, RESET);
     
     // Filtra as URLs que têm parâmetros e não contêm as extensões especificadas
     for linha in reader.lines() {
-        let url = linha?;
-        let url = url.trim().to_string();
-        total_urls += 1;
-        
-        if !url.is_empty() && !tem_extensao_remover(&url) && tem_parametros(&url) {
-            urls_filtradas.push(url);
+        match linha {
+            Ok(url_str) => {
+                let url = url_str.trim().to_string();
+                total_urls += 1;
+                
+                if !url.is_empty() && !tem_extensao_remover(&url) && tem_parametros(&url) {
+                    urls_filtradas.push(url);
+                }
+            }
+            Err(_e) => {
+                // Ignora linhas com erro de UTF-8 e continua
+                linhas_com_erro += 1;
+                total_urls += 1;
+            }
         }
     }
     
@@ -150,7 +159,12 @@ fn filtrar_urls(arquivo_entrada: &str, arquivo_saida: &str) -> std::io::Result<(
     
     println!("{}[+] URLs processadas: {}{}", GREEN, total_urls, RESET);
     println!("{}[+] URLs com parâmetros: {}{}", GREEN, urls_filtradas.len(), RESET);
-    println!("{}[-] URLs removidas: {}{}\n", YELLOW, removidas, RESET);
+    println!("{}[-] URLs removidas: {}{}", YELLOW, removidas, RESET);
+    
+    if linhas_com_erro > 0 {
+        println!("{}[!] Linhas com erro de encoding UTF-8 (ignoradas): {}{}", YELLOW, linhas_com_erro, RESET);
+    }
+    
     println!("{}[✓] URLs filtradas salvas em '{}'{}\n", GREEN, arquivo_saida, RESET);
     
     Ok(())
