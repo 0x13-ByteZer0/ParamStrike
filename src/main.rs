@@ -8,7 +8,33 @@ use std::collections::HashMap;
 // Versionamento
 const VERSION: &str = "1.0.0";
 
-// Cores ANSI
+// Padrões de parâmetros com potencial para vulnerabilidades
+const PARAMETROS_SUSPEITOS: &[&str] = &[
+    // SQL Injection
+    "id", "user_id", "product_id", "post_id", "page", "num", "limit", "offset",
+    "sort", "order", "search", "q", "query", "keyword", "filter", "where", "select",
+    
+    // XSS (Cross-Site Scripting)
+    "message", "msg", "comment", "text", "content", "input", "data", "name",
+    "title", "description", "email", "subject", "body", "template",
+    
+    // LFI/RFI (Local/Remote File Inclusion)
+    "file", "path", "dir", "include", "load", "page", "template", "view",
+    "action", "module", "plugin", "theme", "skin",
+    
+    // SSRF (Server-Side Request Forgery)
+    "url", "uri", "redirect", "return", "return_to", "redirect_to", "goto",
+    "next", "target", "proxy", "fetch", "load_url",
+    
+    // Command Injection
+    "cmd", "command", "exec", "execute", "process", "run", "system",
+    
+    // Path Traversal
+    "filename", "filepath", "document", "resource", "asset",
+    
+    // Open Redirect
+    "link", "href", "ref", "from", "back", "continue",
+];
 const RED: &str = "\x1b[91m";
 const GREEN: &str = "\x1b[92m";
 const YELLOW: &str = "\x1b[93m";
