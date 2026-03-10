@@ -34,6 +34,9 @@ fn main() {
     
     mostrar_banner();
     
+    // Verifica se a ferramenta está atualizada
+    verificar_atualizacoes();
+    
     // Verifica as flags globais
     let verbose = args.contains(&"-v".to_string()) || args.contains(&"--verbose".to_string());
     let check_status = args.contains(&"-status".to_string()) || args.contains(&"--status".to_string());
@@ -134,6 +137,72 @@ fn mostrar_help() {
     println!("    {}$ paramstrike -f subs.txt{}\n", GREEN, RESET);
 }
 
+// Função para obter o hash do último commit
+fn obter_hash_commit() -> Option<String> {
+    let output = Command::new("git")
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output();
+    
+    match output {
+        Ok(out) => {
+            if out.status.success() {
+                let hash = String::from_utf8_lossy(&out.stdout);
+                Some(hash.trim().to_string())
+            } else {
+                None
+            }
+        }
+        Err(_) => None,
+    }
+}
+
+// Função para ler o hash salvo localmente
+fn ler_hash_salvo() -> Option<String> {
+    match std::fs::read_to_string(".version") {
+        Ok(content) => Some(content.trim().to_string()),
+        Err(_) => None,
+    }
+}
+
+// Função para salvar o hash do commit
+fn salvar_hash_commit(hash: &str) -> std::io::Result<()> {
+    std::fs::write(".version", hash)
+}
+
+// Função para verificar se há atualizações disponíveis
+fn verificar_atualizacoes() {
+    match obter_hash_commit() {
+        Some(hash_atual) => {
+            match ler_hash_salvo() {
+                Some(hash_salvo) => {
+                    if hash_atual != hash_salvo {
+                        println!("{}╔════════════════════════════════════════════╗{}", YELLOW, RESET);
+                        println!("{}║ {}⚠ FERRAMENTA DESATUALIZADA!                {}║{}", YELLOW, RED, YELLOW, RESET);
+                        println!("{}║ {}Execute: paramstrike -up{}                    {}║{}", YELLOW, CYAN, RESET, YELLOW, RESET);
+                        println!("{}╚════════════════════════════════════════════╝{}", YELLOW, RESET);
+                        println!();
+                    } else {
+                        println!("{}[✓] Ferramenta atualizada (latest){}", GREEN, RESET);
+                        println!();
+                    }
+                }
+                None => {
+                    println!("{}[*] Primeira execução - salvando versão{}", BLUE, RESET);
+                    let _ = salvar_hash_commit(&hash_atual);
+                    println!("{}[✓] Ferramenta atualizada (latest){}", GREEN, RESET);
+                    println!();
+                }
+            }
+        }
+        Err(_) => {
+            println!("{}[!] Não foi possível verificar versão (Git não disponível){}", YELLOW, RESET);
+            println!();
+        }
+    }
+}
+
+
 // Função para verificar se a URL contém uma das extensões especificadas
 fn tem_extensao_remover(url: &str) -> bool {
     let url = url.trim().to_lowercase();
@@ -224,8 +293,23 @@ fn atualizar_ferramenta() {
                     println!("{}{}{}", CYAN, msg, RESET);
                 }
                 println!();
+                
+                // Obter novo hash e salvar
+                if let Some(novo_hash) = obter_hash_commit() {
+                    match salvar_hash_commit(&novo_hash) {
+                        Ok(_) => {
+                            println!("{}[✓] Versão salva: {}{}", GREEN, novo_hash, RESET);
+                        }
+                        Err(e) => {
+                            eprintln!("{}[!] Aviso ao salvar versão: {}{}", YELLOW, e, RESET);
+                        }
+                    }
+                }
+                
+                println!();
                 println!("{}╔════════════════════════════════════════════╗{}", BLUE, RESET);
                 println!("{}║ {}{} Ferramenta atualizada e recompilada! {}{}║{}", BLUE, GREEN, BOLD, RESET, BLUE, RESET);
+                println!("{}║ {}{}Latest version{}                           {}║{}", BLUE, GREEN, BOLD, RESET, BLUE, RESET);
                 println!("{}╚════════════════════════════════════════════╝{}", BLUE, RESET);
             } else {
                 let err = String::from_utf8_lossy(&output.stderr);
