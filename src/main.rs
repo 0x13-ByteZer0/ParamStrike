@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{self, Command, Stdio};
+use std::collections::HashMap;
 
 // Cores ANSI
 const RED: &str = "\x1b[91m";
@@ -24,7 +25,18 @@ fn main() {
         return;
     }
     
+    // Verifica se é solicitado update
+    if args.contains(&"-up".to_string()) || args.contains(&"--update".to_string()) {
+        mostrar_banner();
+        atualizar_ferramenta();
+        return;
+    }
+    
     mostrar_banner();
+    
+    // Verifica as flags globais
+    let verbose = args.contains(&"-v".to_string()) || args.contains(&"--verbose".to_string());
+    let check_status = args.contains(&"-status".to_string()) || args.contains(&"--status".to_string());
     
     // Verifica se é passado um domínio único (-d)
     if let Some(pos) = args.iter().position(|x| x == "-d") {
@@ -53,7 +65,7 @@ fn main() {
     // Modo padrão: apenas filtrar URLs passadas por -l
     let (arquivo_entrada, arquivo_saida) = processar_argumentos();
     
-    if let Err(e) = filtrar_urls(&arquivo_entrada, &arquivo_saida) {
+    if let Err(e) = filtrar_urls(&arquivo_entrada, &arquivo_saida, verbose, check_status) {
         eprintln!("{}[✗] Erro ao processar o arquivo: {}{}", RED, e, RESET);
         process::exit(1);
     }
@@ -104,11 +116,18 @@ fn mostrar_help() {
     println!("  {}  -o <arquivo>{}    Arquivo de saída (padrão: urls_parametros.txt)", YELLOW, RESET);
     println!("  {}  -d <domain>{}     Domínio único - executar subfinder, katana e urlfinder", CYAN, RESET);
     println!("  {}  -f <arquivo>{}    Arquivo com lista de subdomínios para crawler", CYAN, RESET);
+    println!("  {}  -v, --verbose{}   Modo verbose (mostra fluxo de processamento)", MAGENTA, RESET);
+    println!("  {}  -status{}          Verificar status HTTP e salvar em arquivos separados", MAGENTA, RESET);
+    println!("  {}  -up, --update{}   Atualizar a ferramenta do Git e recompilar", MAGENTA, RESET);
     println!("  {}  -h, --help{}      Mostra esta mensagem de ajuda\n", YELLOW, RESET);
     
     println!("{}Exemplos:{}", BOLD, RESET);
     println!("  {}Modo padrão (filtrar URLs):{}", GREEN, RESET);
     println!("    {}$ paramstrike -l urls.txt -o resultado.txt{}", GREEN, RESET);
+    println!("  {}Com verbose e verificação de status:{}", GREEN, RESET);
+    println!("    {}$ paramstrike -l urls.txt -o resultado.txt -v -status{}", GREEN, RESET);
+    println!("  {}Atualizar ferramenta:{}", GREEN, RESET);
+    println!("    {}$ paramstrike -up{}", GREEN, RESET);
     println!("  {}Modo domínio único:{}", GREEN, RESET);
     println!("    {}$ paramstrike -d example.com{}", GREEN, RESET);
     println!("  {}Modo lista de subdomínios:{}", GREEN, RESET);
@@ -133,8 +152,112 @@ fn tem_extensao_remover(url: &str) -> bool {
 fn tem_parametros(url: &str) -> bool {
     url.contains('?')
 }
+
+// Função para verificar o status HTTP de uma URL
+fn verificar_status_http(url: &str) -> Option<u16> {
+    let output = Command::new("curl")
+        .arg("-s")
+        .arg("-o")
+        .arg("/dev/null")
+        .arg("-w")
+        .arg("%{http_code}")
+        .arg("--max-time")
+        .arg("5")
+        .arg(url)
+        .output();
+    
+    match output {
+        Ok(out) => {
+            let status_str = String::from_utf8_lossy(&out.stdout);
+            status_str.trim().parse::<u16>().ok()
+        }
+        Err(_) => None,
+    }
+}
+
+// Função para atualizar a ferramenta do Git e recompilar
+fn atualizar_ferramenta() {
+    println!("{}[*] Iniciando atualização da ferramenta...\n", BLUE);
+    
+    // Executa git pull
+    println!("{}[*] Realizando git pull...{}", CYAN, RESET);
+    let git_output = Command::new("git")
+        .arg("pull")
+        .output();
+    
+    match git_output {
+        Ok(output) => {
+            if output.status.success() {
+                let msg = String::from_utf8_lossy(&output.stdout);
+                println!("{}[✓] Git pull concluído!{}", GREEN, RESET);
+                if !msg.trim().is_empty() {
+                    println!("{}{}{}", CYAN, msg, RESET);
+                }
+            } else {
+                let err = String::from_utf8_lossy(&output.stderr);
+                eprintln!("{}[✗] Erro ao executar git pull:{}", RED, RESET);
+                eprintln!("{}{}{}", YELLOW, err, RESET);
+                process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("{}[✗] Erro ao executar git: {}{}", RED, e, RESET);
+            process::exit(1);
+        }
+    }
+    
+    println!();
+    
+    // Executa cargo build --release
+    println!("{}[*] Compilando com cargo...{}", CYAN, RESET);
+    let cargo_output = Command::new("cargo")
+        .arg("build")
+        .arg("--release")
+        .output();
+    
+    match cargo_output {
+        Ok(output) => {
+            if output.status.success() {
+                println!("{}[✓] Compilação concluída com sucesso!{}", GREEN, RESET);
+                let msg = String::from_utf8_lossy(&output.stdout);
+                if !msg.trim().is_empty() {
+                    println!("{}{}{}", CYAN, msg, RESET);
+                }
+                println!();
+                println!("{}╔════════════════════════════════════════════╗{}", BLUE, RESET);
+                println!("{}║ {}{} Ferramenta atualizada e recompilada! {}{}║{}", BLUE, GREEN, BOLD, RESET, BLUE, RESET);
+                println!("{}╚════════════════════════════════════════════╝{}", BLUE, RESET);
+            } else {
+                let err = String::from_utf8_lossy(&output.stderr);
+                eprintln!("{}[✗] Erro ao compilar:{}", RED, RESET);
+                eprintln!("{}{}{}", YELLOW, err, RESET);
+                process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("{}[✗] Erro ao executar cargo: {}{}", RED, e, RESET);
+            eprintln!("{}Certifique-se de que Rust está instalado e no PATH.{}", YELLOW, RESET);
+            process::exit(1);
+        }
+    }
+}
+
+
+// Função para obter nome do arquivo baseado no status code
+fn obter_nome_arquivo_status(status: u16, arquivo_base: &str) -> String {
+    let categoria = match status {
+        200..=299 => "2xx_sucessos",
+        300..=399 => "3xx_redirecionamentos",
+        400..=499 => "4xx_erros_cliente",
+        500..=599 => "5xx_erros_servidor",
+        _ => "desconhecido",
+    };
+    
+    let sem_extensao = arquivo_base.strip_suffix(".txt").unwrap_or(arquivo_base);
+    format!("{}_{}.txt", sem_extensao, categoria)
+}
 // Função para filtrar URLs e salvar as válidas
-fn filtrar_urls(arquivo_entrada: &str, arquivo_saida: &str) -> std::io::Result<()> {
+fn filtrar_urls(arquivo_entrada: &str, arquivo_saida: &str, verbose: bool, check_status: bool) -> std::io::Result<()> {
     // Lê o arquivo de entrada
     let file = File::open(arquivo_entrada)?;
     let reader = BufReader::new(file);
@@ -144,6 +267,10 @@ fn filtrar_urls(arquivo_entrada: &str, arquivo_saida: &str) -> std::io::Result<(
     let mut linhas_com_erro = 0;
     
     println!("{}[*] Processando arquivo: {}{}", BLUE, arquivo_entrada, RESET);
+    if verbose {
+        println!("{}[V] Modo verbose ativado{}", MAGENTA, RESET);
+        println!("{}[V] Verificação de status: {}{}", MAGENTA, check_status, RESET);
+    }
     
     // Filtra as URLs que têm parâmetros e não contêm as extensões especificadas
     for linha in reader.lines() {
@@ -152,32 +279,33 @@ fn filtrar_urls(arquivo_entrada: &str, arquivo_saida: &str) -> std::io::Result<(
                 let url = url_str.trim().to_string();
                 total_urls += 1;
                 
+                if verbose && total_urls % 100 == 0 {
+                    println!("{}[V] Processadas {} URLs...", MAGENTA, total_urls);
+                }
+                
                 if !url.is_empty() && !tem_extensao_remover(&url) && tem_parametros(&url) {
+                    if verbose {
+                        println!("{}[V] URL válida: {}{}", CYAN, url, RESET);
+                    }
                     urls_filtradas.push(url);
+                } else if verbose && !url.is_empty() {
+                    if tem_extensao_remover(&url) {
+                        println!("{}[V] Removida (extensão): {}{}", YELLOW, url, RESET);
+                    } else if !tem_parametros(&url) {
+                        println!("{}[V] Removida (sem parâmetros): {}{}", YELLOW, url, RESET);
+                    }
                 }
             }
             Err(_e) => {
                 // Ignora linhas com erro de UTF-8 e continua
                 linhas_com_erro += 1;
                 total_urls += 1;
+                if verbose {
+                    println!("{}[V] Erro UTF-8 ignorado na linha {}{}", YELLOW, total_urls, RESET);
+                }
             }
         }
     }
-    
-    // Salva as URLs filtradas no arquivo de saída usando anew (remove duplicatas)
-    let mut child = Command::new("anew")
-        .arg(arquivo_saida)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .spawn()?;
-    
-    if let Some(mut stdin) = child.stdin.take() {
-        for url in urls_filtradas.iter() {
-            writeln!(stdin, "{}", url)?;
-        }
-    }
-    
-    child.wait()?;
     
     let removidas = total_urls - urls_filtradas.len();
     
@@ -189,8 +317,88 @@ fn filtrar_urls(arquivo_entrada: &str, arquivo_saida: &str) -> std::io::Result<(
         println!("{}[!] Linhas com erro de encoding UTF-8 (ignoradas): {}{}", YELLOW, linhas_com_erro, RESET);
     }
     
-    println!("{}[✓] URLs filtradas salvas em '{}'{}\n", GREEN, arquivo_saida, RESET);
+    // Se check_status é true, verifica status HTTP de cada URL
+    if check_status {
+        println!("{}[*] Verificando status HTTP das URLs...", MAGENTA);
+        let mut urls_por_status: HashMap<u16, Vec<String>> = HashMap::new();
+        let mut urls_sem_resposta = Vec::new();
+        
+        for (idx, url) in urls_filtradas.iter().enumerate() {
+            if verbose {
+                print!("{}[V] Verificando {} ({}/{})", CYAN, url, idx + 1, urls_filtradas.len());
+                let _ = std::io::stdout().flush();
+            }
+            
+            match verificar_status_http(url) {
+                Some(status) => {
+                    if verbose {
+                        println!(" -> Status: {}{}", status, RESET);
+                    }
+                    urls_por_status.entry(status).or_insert_with(Vec::new).push(url.clone());
+                }
+                None => {
+                    if verbose {
+                        println!(" -> Sem resposta{}", RESET);
+                    }
+                    urls_sem_resposta.push(url.clone());
+                }
+            }
+        }
+        
+        // Salva URLs por status code usando anew
+        for (status, urls) in urls_por_status.iter() {
+            let arquivo_status = obter_nome_arquivo_status(*status, arquivo_saida);
+            let mut child = Command::new("anew")
+                .arg(&arquivo_status)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .spawn()?;
+            
+            if let Some(mut stdin) = child.stdin.take() {
+                for url in urls.iter() {
+                    writeln!(stdin, "{}", url)?
+                }
+            }
+            child.wait()?;
+            println!("{}[✓] {} URLs com status {} salvas em '{}'{}", GREEN, urls.len(), status, arquivo_status, RESET);
+        }
+        
+        // Salva URLs sem resposta
+        if !urls_sem_resposta.is_empty() {
+            let arquivo_sem_resposta = arquivo_saida.replace(".txt", "_sem_resposta.txt");
+            let mut child = Command::new("anew")
+                .arg(&arquivo_sem_resposta)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .spawn()?;
+            
+            if let Some(mut stdin) = child.stdin.take() {
+                for url in urls_sem_resposta.iter() {
+                    writeln!(stdin, "{}", url)?
+                }
+            }
+            child.wait()?;
+            println!("{}[!] {} URLs sem resposta salvas em '{}'{}", YELLOW, urls_sem_resposta.len(), arquivo_sem_resposta, RESET);
+        }
+    } else {
+        // Salva as URLs filtradas no arquivo de saída usando anew (remove duplicatas)
+        let mut child = Command::new("anew")
+            .arg(arquivo_saida)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()?;
+        
+        if let Some(mut stdin) = child.stdin.take() {
+            for url in urls_filtradas.iter() {
+                writeln!(stdin, "{}", url)?;
+            }
+        }
+        
+        child.wait()?;
+        println!("{}[✓] URLs filtradas salvas em '{}'{}", GREEN, arquivo_saida, RESET);
+    }
     
+    println!();
     Ok(())
 }
 
