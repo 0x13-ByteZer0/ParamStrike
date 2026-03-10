@@ -66,13 +66,17 @@ fn main() {
     // Verifica as flags globais
     let verbose = args.contains(&"-v".to_string()) || args.contains(&"--verbose".to_string());
     let check_status = args.contains(&"-status".to_string()) || args.contains(&"--status".to_string());
-    let explorar = args.contains(&"-p".to_string()) || args.contains(&"--explore".to_string());
     let usar_ollama = args.contains(&"--ollama".to_string());
+    let explorar = args.contains(&"-p".to_string()) || args.contains(&"--explore".to_string()) || usar_ollama;
     let modelo_ollama = args
         .windows(2)
         .find(|w| w[0] == "--ollama-model")
         .map(|w| w[1].clone())
         .unwrap_or_else(|| OLLAMA_MODEL_DEFAULT.to_string());
+    let report_prefix = args
+        .windows(2)
+        .find(|w| w[0] == "--report-prefix")
+        .map(|w| w[1].clone());
     
     // Verifica se é passado um domínio único (-d)
     if let Some(pos) = args.iter().position(|x| x == "-d") {
@@ -101,7 +105,7 @@ fn main() {
     // Modo padrão: apenas filtrar URLs passadas por -l
     let (arquivo_entrada, arquivo_saida) = processar_argumentos();
     
-    if let Err(e) = filtrar_urls(&arquivo_entrada, &arquivo_saida, verbose, check_status, explorar, usar_ollama, &modelo_ollama) {
+    if let Err(e) = filtrar_urls(&arquivo_entrada, &arquivo_saida, verbose, check_status, explorar, usar_ollama, &modelo_ollama, report_prefix) {
         eprintln!("{}[✗] Erro ao processar o arquivo: {}{}", RED, e, RESET);
         process::exit(1);
     }
@@ -157,6 +161,7 @@ fn mostrar_help() {
     println!("  {}  -p, --explore{}   Explorar ativamente os parâmetros (SQLi/XSS básicos)", MAGENTA, RESET);
     println!("  {}  --ollama{}         Validar achados com Ollama (desliga falsos positivos)", MAGENTA, RESET);
     println!("  {}  --ollama-model <m>{} Modelo Ollama (padrão: {})", MAGENTA, RESET, OLLAMA_MODEL_DEFAULT);
+    println!("  {}  --report-prefix <p>{} Salvar achados em CSV (ex.: relatorio)", MAGENTA, RESET);
     println!("  {}  -up, --update{}   Atualizar a ferramenta do Git e recompilar", MAGENTA, RESET);
     println!("  {}  -h, --help{}      Mostra esta mensagem de ajuda\n", YELLOW, RESET);
     
@@ -167,6 +172,8 @@ fn mostrar_help() {
     println!("    {}$ paramstrike -l urls.txt -o resultado.txt -p{}", GREEN, RESET);
     println!("  {}Com exploração + validação no LLM local:{}", GREEN, RESET);
     println!("    {}$ paramstrike -l urls.txt -o resultado.txt -p --ollama --ollama-model {}{}", GREEN, OLLAMA_MODEL_DEFAULT, RESET);
+    println!("  {}Gerar relatório em CSV dos achados:{}", GREEN, RESET);
+    println!("    {}$ paramstrike -l urls.txt -o resultado.txt -p --report-prefix relatorio{}", GREEN, RESET);
     println!("  {}Com verbose e verificação de status:{}", GREEN, RESET);
     println!("    {}$ paramstrike -l urls.txt -o resultado.txt -v -status{}", GREEN, RESET);
     println!("  {}Atualizar ferramenta:{}", GREEN, RESET);
@@ -407,6 +414,7 @@ fn filtrar_urls(
     explorar: bool,
     usar_ollama: bool,
     modelo_ollama: &str,
+    report_prefix: Option<String>,
 ) -> std::io::Result<()> {
     // Lê o arquivo de entrada
     let file = File::open(arquivo_entrada)?;
@@ -422,6 +430,9 @@ fn filtrar_urls(
         println!("{}[V] Verificação de status: {}{}", MAGENTA, check_status, RESET);
         println!("{}[V] Exploração ativa: {}{}", MAGENTA, explorar, RESET);
         println!("{}[V] Validação Ollama: {} | Modelo: {}{}", MAGENTA, usar_ollama, modelo_ollama, RESET);
+        if let Some(prefix) = &report_prefix {
+            println!("{}[V] Relatório CSV prefixo: {}{}", MAGENTA, prefix, RESET);
+        }
     }
     
     // Filtra as URLs que têm parâmetros e não contêm as extensões especificadas
@@ -552,7 +563,13 @@ fn filtrar_urls(
     
     // Exploração ativa de parâmetros (SQLi / XSS básicos)
     if explorar {
-        explorar_vulnerabilidades(&urls_filtradas, verbose, usar_ollama, modelo_ollama)?;
+        explorar_vulnerabilidades(
+            &urls_filtradas,
+            verbose,
+            usar_ollama,
+            modelo_ollama,
+            report_prefix.as_deref(),
+        )?;
     }
     
     println!();
@@ -623,10 +640,17 @@ struct Achado {
 }
 
 // Explora ativamente parâmetros identificados nas URLs
-fn explorar_vulnerabilidades(urls: &[String], verbose: bool, usar_ollama: bool, modelo: &str) -> std::io::Result<()> {
+fn explorar_vulnerabilidades(
+    urls: &[String],
+    verbose: bool,
+    usar_ollama: bool,
+    modelo: &str,
+    report_prefix: Option<&str>,
+) -> std::io::Result<()> {
     println!("{}[*] Explorando parâmetros suspeitos (SQLi/XSS)...{}", BLUE, RESET);
     let mut total_testes = 0usize;
     let mut achados: Vec<Achado> = Vec::new();
+    let mut falhas: Vec<(String, String, String, String)> = Vec::new();
     
     for url in urls {
         if !url.contains('?') {
@@ -663,15 +687,15 @@ fn explorar_vulnerabilidades(urls: &[String], verbose: bool, usar_ollama: bool, 
                                     parametro: param.clone(),
                                     payload: payload.to_string(),
                                     corpo: body.chars().take(8000).collect(),
+                                    llm: None,
                                 });
-                            } else if verbose {
-                                println!("{}[V] Testado SQLi {}={}{}", MAGENTA, param, payload, RESET);
+                            } else {
+                                println!("{}[-] Sem indícios SQLi para {} payload {}", BLUE, param, payload, RESET);
                             }
                         }
                         Err(e) => {
-                            if verbose {
-                                println!("{}[V] Falha ao testar {}: {}{}", YELLOW, url, e, RESET);
-                            }
+                            println!("{}[!] Falha ao testar {} ({}): {}{}", YELLOW, url, payload, e, RESET);
+                            falhas.push((url.clone(), param.clone(), payload.to_string(), e.to_string()));
                         }
                     }
                 }
@@ -698,20 +722,20 @@ fn explorar_vulnerabilidades(urls: &[String], verbose: bool, usar_ollama: bool, 
                                     parametro: param.clone(),
                                     payload: payload.to_string(),
                                     corpo: body.chars().take(8000).collect(),
+                                    llm: None,
                                 });
-                            } else if verbose {
-                                println!("{}[V] Testado XSS {}={}{}", MAGENTA, param, payload, RESET);
+                            } else {
+                                println!("{}[-] Sem indícios XSS para {} payload {}", BLUE, param, payload, RESET);
                             }
                         }
                         Err(e) => {
-                            if verbose {
-                                println!("{}[V] Falha ao testar {}: {}{}", YELLOW, url, e, RESET);
-                            }
+                            println!("{}[!] Falha ao testar {} ({}): {}{}", YELLOW, url, payload, e, RESET);
+                            falhas.push((url.clone(), param.clone(), payload.to_string(), e.to_string()));
                         }
                     }
                 }
-            }
         }
+    }
     }
     
     println!("{}[+] Testes ativos executados: {}{}", GREEN, total_testes, RESET);
@@ -720,15 +744,21 @@ fn explorar_vulnerabilidades(urls: &[String], verbose: bool, usar_ollama: bool, 
     }
 
     if usar_ollama && !achados.is_empty() {
-        validar_com_ollama(modelo, &achados, verbose)?;
+        validar_com_ollama(modelo, &mut achados, verbose)?;
+    } else if usar_ollama {
+        println!("{}[LLM] Nenhum achado para validar com Ollama.{}", BLUE, RESET);
+    }
+
+    if let Some(prefix) = report_prefix {
+        salvar_relatorios(prefix, &achados, &falhas)?;
     }
     
     Ok(())
 }
 
-fn validar_com_ollama(modelo: &str, achados: &[Achado], verbose: bool) -> std::io::Result<()> {
+fn validar_com_ollama(modelo: &str, achados: &mut [Achado], verbose: bool) -> std::io::Result<()> {
     println!("{}[*] Validando achados com Ollama (modelo: {}){}", CYAN, modelo, RESET);
-    for achado in achados {
+    for achado in achados.iter_mut() {
         let prompt = format!(
             "Classifique rapidamente se este achado de segurança é provavelmente verdadeiro ou falso positivo.\n\
 Tipo: {tipo}\nURL: {url}\nParâmetro: {param}\nPayload: {payload}\nTrecho de resposta (pode estar truncado):\n{corpo}\n\
@@ -756,6 +786,7 @@ Responda somente com 'true_positive' ou 'false_positive' e uma curta justificati
                     Ok(out) => {
                         let resposta = String::from_utf8_lossy(&out.stdout);
                         println!("{}[LLM] {} -> {}{}", GREEN, achado.url, resposta.trim(), RESET);
+                        achado.llm = Some(resposta.trim().to_string());
                     }
                     Err(e) => {
                         eprintln!("{}[LLM] Falha ao ler saída: {}{}", YELLOW, e, RESET);
@@ -771,6 +802,53 @@ Responda somente com 'true_positive' ou 'false_positive' e uma curta justificati
         }
     }
     Ok(())
+}
+
+fn salvar_relatorios(prefix: &str, achados: &[Achado], falhas: &[(String, String, String, String)]) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let achados_path = format!("{}_achados.csv", prefix);
+    let falhas_path = format!("{}_falhas.csv", prefix);
+
+    // Achados
+    {
+        let mut file = File::create(&achados_path)?;
+        writeln!(file, "tipo,url,parametro,payload,llm")?;
+        for a in achados {
+            writeln!(
+                file,
+                "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"",
+                a.tipo,
+                escape_csv(&a.url),
+                escape_csv(&a.parametro),
+                escape_csv(&a.payload),
+                escape_csv(a.llm.as_deref().unwrap_or(""))
+            )?;
+        }
+    }
+
+    // Falhas
+    {
+        let mut file = File::create(&falhas_path)?;
+        writeln!(file, "url,parametro,payload,erro")?;
+        for (u, p, pay, err) in falhas {
+            writeln!(
+                file,
+                "\"{}\",\"{}\",\"{}\",\"{}\"",
+                escape_csv(u),
+                escape_csv(p),
+                escape_csv(pay),
+                escape_csv(err)
+            )?;
+        }
+    }
+
+    println!("{}[✓] Relatórios salvos em '{}' e '{}'{}", GREEN, achados_path, falhas_path, RESET);
+    Ok(())
+}
+
+fn escape_csv(texto: &str) -> String {
+    texto.replace('\"', "\"\"")
 }
 
 // Função para executar subfinder
