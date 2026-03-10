@@ -2,7 +2,7 @@ use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{self, Command};
+use std::process::{self, Command, Stdio};
 
 // Cores ANSI
 const RED: &str = "\x1b[91m";
@@ -164,11 +164,20 @@ fn filtrar_urls(arquivo_entrada: &str, arquivo_saida: &str) -> std::io::Result<(
         }
     }
     
-    // Salva as URLs filtradas no arquivo de saída
-    let mut output_file = File::create(arquivo_saida)?;
-    for url in urls_filtradas.iter() {
-        writeln!(output_file, "{}", url)?;
+    // Salva as URLs filtradas no arquivo de saída usando anew (remove duplicatas)
+    let mut child = Command::new("anew")
+        .arg(arquivo_saida)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()?;
+    
+    if let Some(mut stdin) = child.stdin.take() {
+        for url in urls_filtradas.iter() {
+            writeln!(stdin, "{}", url)?;
+        }
     }
+    
+    child.wait()?;
     
     let removidas = total_urls - urls_filtradas.len();
     
