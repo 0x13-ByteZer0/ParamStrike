@@ -382,7 +382,7 @@ fn atualizar_ferramenta() {
                 
                 // Sincroniza .version com a versão do repositório, sem modificar VERSION
                 match salvar_versao(&versao_repo) {
-                    Ok(_) => println!("{}[✓] Versão sincronizada: {}{}", GREEN, versao_repo, RESET);
+                    Ok(_) => println!("{}[✓] Versão sincronizada: {}{}", GREEN, versao_repo, RESET),
                     Err(e) => eprintln!("{}[!] Aviso ao salvar .version: {}{}", YELLOW, e, RESET),
                 }
                 
