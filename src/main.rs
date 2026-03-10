@@ -637,6 +637,7 @@ struct Achado {
     parametro: String,
     payload: String,
     corpo: String,
+    llm: Option<String>,
 }
 
 // Explora ativamente parâmetros identificados nas URLs
@@ -690,7 +691,7 @@ fn explorar_vulnerabilidades(
                                     llm: None,
                                 });
                             } else {
-                                println!("{}[-] Sem indícios SQLi para {} payload {}", BLUE, param, payload, RESET);
+                                println!("{}[-] Sem indícios SQLi para {} payload {}{}", BLUE, param, payload, RESET);
                             }
                         }
                         Err(e) => {
@@ -725,7 +726,7 @@ fn explorar_vulnerabilidades(
                                     llm: None,
                                 });
                             } else {
-                                println!("{}[-] Sem indícios XSS para {} payload {}", BLUE, param, payload, RESET);
+                                println!("{}[-] Sem indícios XSS para {} payload {}{}", BLUE, param, payload, RESET);
                             }
                         }
                         Err(e) => {
@@ -951,7 +952,7 @@ fn processar_domain_unico(domain: &str) {
     println!("\n{}[*] Iniciando filtragem de URLs{}\n", BLUE, RESET);
     
     // Filtra as URLs
-    if let Err(e) = filtrar_urls(urls_file, &resultado_file, false, false, false, false, OLLAMA_MODEL_DEFAULT) {
+    if let Err(e) = filtrar_urls(urls_file, &resultado_file, false, false, false, false, OLLAMA_MODEL_DEFAULT, None) {
         eprintln!("{}[✗] Erro ao filtrar URLs: {}{}", RED, e, RESET);
         process::exit(1);
     }
@@ -990,7 +991,7 @@ fn processar_lista_dominios(arquivo_subs: &str) {
     println!("\n{}[*] Iniciando filtragem de URLs{}\n", BLUE, RESET);
     
     // Filtra as URLs
-    if let Err(e) = filtrar_urls(urls_file, resultado_file, false, false, false, false, OLLAMA_MODEL_DEFAULT) {
+    if let Err(e) = filtrar_urls(urls_file, resultado_file, false, false, false, false, OLLAMA_MODEL_DEFAULT, None) {
         eprintln!("{}[✗] Erro ao filtrar URLs: {}{}", RED, e, RESET);
         process::exit(1);
     }
