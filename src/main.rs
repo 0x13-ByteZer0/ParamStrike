@@ -90,7 +90,15 @@ fn main() {
         .find(|w| w[0] == "--pinchtab-host")
         .map(|w| w[1].clone())
         .unwrap_or_else(|| "http://localhost:9867".to_string());
-    let pinchtab_cfg = pinchtab_start.clone().map(|s| PinchTabConfig { start: s, host: pinchtab_host.clone() });
+    let mut pinchtab_seeds = Vec::new();
+    if let Some(s) = pinchtab_start.clone() {
+        pinchtab_seeds.push(s);
+    }
+    let pinchtab_cfg = if pinchtab_start.is_some() {
+        Some(PinchTabConfig { host: pinchtab_host.clone(), seeds: pinchtab_seeds })
+    } else {
+        None
+    };
     
     // Verifica se Ã© passado um domÃ­nio Ãºnico (-d)
     if let Some(pos) = args.iter().position(|x| x == "-d") {
@@ -675,19 +683,19 @@ fn reflexo_xss(corpo: &str, marcador: &str) -> bool {
     corpo.contains(marcador)
 }
 
-fn coletar_urls_pinchtab(cfg: &PinchTabConfig, verbose: bool) -> std::io::Result<Vec<String>> {
+fn coletar_urls_pinchtab(host: &str, start: &str, verbose: bool) -> std::io::Result<Vec<String>> {
     let client = Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
     if verbose {
-        println!("{}[*] Abrindo {} via pinchtab ({}){}", CYAN, cfg.start, cfg.host, RESET);
+        println!("{}[*] Abrindo {} via pinchtab ({}){}", CYAN, start, host, RESET);
     }
 
     let tab_resp: Value = client
-        .post(format!("{}/tab", cfg.host))
-        .json(&serde_json::json!({"action": "new", "url": cfg.start}))
+        .post(format!("{}/tab", host))
+        .json(&serde_json::json!({"action": "new", "url": start}))
         .send()
         .and_then(|r| r.json())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
@@ -699,7 +707,7 @@ fn coletar_urls_pinchtab(cfg: &PinchTabConfig, verbose: bool) -> std::io::Result
         .to_string();
 
     let snap: Value = client
-        .get(format!("{}/snapshot", cfg.host))
+        .get(format!("{}/snapshot", host))
         .query(&[("tabId", tab_id.as_str()), ("filter", "interactive")])
         .send()
         .and_then(|r| r.json())
@@ -764,9 +772,10 @@ struct Achado {
 }
 
 #[derive(Clone)]
+#[derive(Clone)]
 struct PinchTabConfig {
-    start: String,
     host: String,
+    seeds: Vec<String>,
 }
 
 // Explora ativamente parÃ¢metros identificados nas URLs
