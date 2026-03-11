@@ -43,6 +43,7 @@ const UNSLOTH_MODEL_URL_RECOMENDADO: &str = "https://huggingface.co/unsloth/Qwen
 const UNSLOTH_MODEL_ARQUIVO_RECOMENDADO: &str = "Qwen3.5-8B-Instruct-Q4_K_M.gguf";
 const UNSLOTH_DIR_LOCAL: &str = "unsloth_local";
 const LLAMA_SERVER_URL_WIN: &str = "https://github.com/ggerganov/llama.cpp/releases/download/b3608/llama-server.exe";
+const LLAMA_CPP_PYTHON: &str = "llama_cpp.server"; // fallback cross-platform via pip
 
 // CORREÇÃO #12: constante nomeada para o limite de preview do corpo da resposta.
 const MAX_CHARS_PREVIEW_CORPO: usize = 8_000;
@@ -951,28 +952,7 @@ fn bootstrap_unsloth(modelo: &str, host: &mut String, verbose: bool) -> std::io:
     let base_dir = Path::new(UNSLOTH_DIR_LOCAL);
     std::fs::create_dir_all(base_dir)?;
 
-    // 1) Binário llama-server
-    let bin_path = if cfg!(windows) {
-        base_dir.join("llama-server.exe")
-    } else {
-        base_dir.join("llama-server")
-    };
-
-    if !bin_path.exists() {
-        if cfg!(windows) {
-            println!("{}[*] Baixando llama-server (Windows)...{}", CYAN, RESET);
-            baixar_arquivo(LLAMA_SERVER_URL_WIN, &bin_path)?;
-        } else {
-            return Err(std::io::Error::new(
-                ErrorKind::Other,
-                "bootstrap automático ainda não implementado para este SO; instale manually o llama.cpp server",
-            ));
-        }
-    } else if verbose {
-        println!("{}[V] Binário llama-server já presente em {}{}", MAGENTA, bin_path.display(), RESET);
-    }
-
-    // 2) Modelo recomendado
+    // 1) Modelo recomendado (download único de ~4GB)
     let modelo_path = base_dir.join(UNSLOTH_MODEL_ARQUIVO_RECOMENDADO);
     if !modelo_path.exists() {
         println!("{}[*] Baixando modelo recomendado (pode demorar, ~4GB)...{}", CYAN, RESET);
@@ -981,23 +961,63 @@ fn bootstrap_unsloth(modelo: &str, host: &mut String, verbose: bool) -> std::io:
         println!("{}[V] Modelo já encontrado em {}{}", MAGENTA, modelo_path.display(), RESET);
     }
 
-    // 3) Sobe o servidor em background com alias = modelo solicitado.
-    println!("{}[*] Subindo llama-server local em {} usando alias '{}'...{}", CYAN, UNSLOTH_HOST_DEFAULT, modelo, RESET);
-    let mut cmd = Command::new(&bin_path);
-    cmd.arg("--model").arg(&modelo_path)
-        .arg("--alias").arg(modelo)
-        .arg("--port").arg("8001")
-        .arg("--host").arg("127.0.0.1")
-        .arg("--ctx-size").arg("4096")
-        .arg("--batch-size").arg("512")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    // 2) Servidor: usa binário nativo em Windows; usa python -m llama_cpp.server nos demais.
+    if cfg!(windows) {
+        let bin_path = base_dir.join("llama-server.exe");
+        if !bin_path.exists() {
+            println!("{}[*] Baixando llama-server (Windows)...{}", CYAN, RESET);
+            baixar_arquivo(LLAMA_SERVER_URL_WIN, &bin_path)?;
+        } else if verbose {
+            println!("{}[V] Binário llama-server já presente em {}{}", MAGENTA, bin_path.display(), RESET);
+        }
 
-    let _child = cmd.spawn()?;
+        println!("{}[*] Subindo llama-server local em {} usando alias '{}'...{}", CYAN, UNSLOTH_HOST_DEFAULT, modelo, RESET);
+        let mut cmd = Command::new(&bin_path);
+        cmd.arg("--model").arg(&modelo_path)
+            .arg("--alias").arg(modelo)
+            .arg("--port").arg("8001")
+            .arg("--host").arg("127.0.0.1")
+            .arg("--ctx-size").arg("4096")
+            .arg("--batch-size").arg("512")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let _child = cmd.spawn()?;
+    } else {
+        // Localiza python
+        let python_bin = ["python3", "python"]
+            .iter()
+            .find_map(|bin| Command::new(bin).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().ok().and_then(|s| if s.success() { Some(bin.to_string()) } else { None }))
+            .ok_or_else(|| std::io::Error::new(ErrorKind::Other, "python3 não encontrado no PATH para subir llama_cpp.server"))?;
+
+        // Instala llama-cpp-python se não houver
+        let show_status = Command::new(&python_bin).args(["-m", "pip", "show", "llama-cpp-python"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        if !matches!(show_status, Ok(status) if status.success()) {
+            println!("{}[*] Instalando dependência pip 'llama-cpp-python' (CPU)…{}", CYAN, RESET);
+            let install = Command::new(&python_bin)
+                .args(["-m", "pip", "install", "--upgrade", "--user", "llama-cpp-python"])
+                .status()
+                .map_err(|e| std::io::Error::new(ErrorKind::Other, format!("pip install falhou: {}", e)))?;
+            if !install.success() {
+                return Err(std::io::Error::new(ErrorKind::Other, "pip install llama-cpp-python falhou"));
+            }
+        }
+
+        let threads = thread::available_parallelism().map(|n| n.get()).unwrap_or(4).to_string();
+        println!("{}[*] Subindo servidor python -m llama_cpp.server em {} com {} threads...{}", CYAN, UNSLOTH_HOST_DEFAULT, threads, RESET);
+        let mut cmd = Command::new(&python_bin);
+        cmd.args(["-m", LLAMA_CPP_PYTHON, "--model"])
+            .arg(&modelo_path)
+            .args(["--alias", modelo])
+            .args(["--port", "8001", "--host", "127.0.0.1"])
+            .args(["--n_gpu_layers", "0", "--ctx_size", "4096"])
+            .args(["--threads", &threads])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let _child = cmd.spawn()?;
+    }
+
     *host = UNSLOTH_HOST_DEFAULT.to_string();
-
-    // Aguarda alguns segundos para o servidor ficar pronto
-    thread::sleep(Duration::from_secs(3));
+    thread::sleep(Duration::from_secs(5));
     Ok(())
 }
 
