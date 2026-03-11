@@ -90,15 +90,35 @@ fn main() {
         .find(|w| w[0] == "--pinchtab-host")
         .map(|w| w[1].clone())
         .unwrap_or_else(|| "http://localhost:9867".to_string());
+    let pinchtab_scope = args
+        .windows(2)
+        .find(|w| w[0] == "--pinchtab-scope")
+        .map(|w| w[1].clone());
+    let pinchtab_scope_file = args
+        .windows(2)
+        .find(|w| w[0] == "--pinchtab-scope-file")
+        .map(|w| w[1].clone());
     let mut pinchtab_seeds = Vec::new();
     if let Some(s) = pinchtab_start.clone() {
         pinchtab_seeds.push(s);
     }
-    let pinchtab_cfg = if pinchtab_start.is_some() {
-        Some(PinchTabConfig { host: pinchtab_host.clone(), seeds: pinchtab_seeds })
-    } else {
-        None
-    };
+    let mut pinchtab_scopes = Vec::new();
+    if let Some(s) = pinchtab_scope {
+        pinchtab_scopes.push(s);
+    }
+    if let Some(scope_path) = pinchtab_scope_file {
+        if let Ok(file) = File::open(&scope_path) {
+            let reader = BufReader::new(file);
+            for line in reader.lines().flatten() {
+                let d = line.trim().to_string();
+                if !d.is_empty() {
+                    pinchtab_scopes.push(d);
+                }
+            }
+        }
+    }
+
+    let pinchtab_cfg = Some(PinchTabConfig { host: pinchtab_host.clone(), seeds: pinchtab_seeds, scopes: pinchtab_scopes });
     
     // Verifica se Ã© passado um domÃ­nio Ãºnico (-d)
     if let Some(pos) = args.iter().position(|x| x == "-d") {
@@ -127,7 +147,7 @@ fn main() {
     // Modo padrÃ£o: apenas filtrar URLs passadas por -l
     let (arquivo_entrada, arquivo_saida) = processar_argumentos();
     
-    let pinchtab_cfg = pinchtab_start.map(|s| PinchTabConfig { start: s, host: pinchtab_host });
+    let pinchtab_cfg = Some(PinchTabConfig { host: pinchtab_host, seeds: pinchtab_seeds, scopes: pinchtab_scopes });
 
     if let Err(e) = filtrar_urls(&arquivo_entrada, &arquivo_saida, verbose, check_status, explorar, usar_ollama, &modelo_ollama, report_prefix, pinchtab_cfg.clone()) {
         eprintln!("{}[âœ—] Erro ao processar o arquivo: {}{}", RED, e, RESET);
@@ -187,7 +207,9 @@ fn mostrar_help() {
     println!("  {}  --ollama-model <m>{} Modelo Ollama (padrÃ£o: {})", MAGENTA, RESET, OLLAMA_MODEL_DEFAULT);
     println!("  {}  --report-prefix <p>{} Salvar achados em CSV (ex.: relatorio)", MAGENTA, RESET);
     println!("  {}  --pinchtab-start <url>{} Usar pinchtab para abrir URL no Firefox/Chrome e extrair links", MAGENTA, RESET);
-    println!("  {}  --pinchtab-host <host>{} Host do serviÃ§o pinchtab (padrÃ£o: http://localhost:9867)", MAGENTA, RESET);
+    println!("  {}  --pinchtab-host <host>{} Host do serviço pinchtab (padrão: http://localhost:9867)", MAGENTA, RESET);
+    println!("  {}  --pinchtab-scope <dom>{} Restringe seeds do pinchtab ao domínio", MAGENTA, RESET);
+    println!("  {}  --pinchtab-scope-file <arq>{} Lista de domínios permitidos para seeds (um por linha)", MAGENTA, RESET);
     println!("  {}  -up, --update{}   Atualizar a ferramenta do Git e recompilar", MAGENTA, RESET);
     println!("  {}  -h, --help{}      Mostra esta mensagem de ajuda\n", YELLOW, RESET);
     
@@ -448,6 +470,7 @@ fn filtrar_urls(
     let reader = BufReader::new(file);
     
     let mut urls_filtradas = Vec::new();
+    let mut urls_cruas = Vec::new();
     let mut total_urls = 0;
     let mut linhas_com_erro = 0;
     
@@ -467,6 +490,7 @@ fn filtrar_urls(
         match linha {
             Ok(url_str) => {
                 let url = url_str.trim().to_string();
+                urls_cruas.push(url.clone());
                 total_urls += 1;
                 
                 if verbose && total_urls % 100 == 0 {
@@ -498,26 +522,35 @@ fn filtrar_urls(
     }
 
     // URLs coletadas via pinchtab
-    if let Some(cfg) = pinchtab_cfg {
+    if let Some(mut cfg) = pinchtab_cfg {
         if verbose {
             println!("{}[*] Coletando links com pinchtab...{}", CYAN, RESET);
         }
-        match coletar_urls_pinchtab(&cfg, verbose) {
-            Ok(colhidas) => {
-                for url in colhidas {
-                    total_urls += 1;
-                    if !url.is_empty() && !tem_extensao_remover(&url) && tem_parametros(&url) {
-                        if verbose {
-                            println!("{}[V] (pinchtab) URL vÃ¡lida: {}{}", CYAN, url, RESET);
+        cfg.seeds.extend(urls_cruas.iter().cloned());
+        if !cfg.scopes.is_empty() {
+            cfg.seeds.retain(|s| cfg.scopes.iter().any(|dom| s.contains(dom)));
+            if verbose {
+                println!("{}[V] pinchtab scopes aplicados: {} seeds após filtro{}", MAGENTA, cfg.seeds.len(), RESET);
+            }
+        }
+        for seed in cfg.seeds.iter() {
+            match coletar_urls_pinchtab(&cfg.host, seed, verbose) {
+                Ok(colhidas) => {
+                    for url in colhidas {
+                        total_urls += 1;
+                        if !url.is_empty() && !tem_extensao_remover(&url) && tem_parametros(&url) {
+                            if verbose {
+                                println!("{}[V] (pinchtab) URL válida: {}{}", CYAN, url, RESET);
+                            }
+                            urls_filtradas.push(url);
+                        } else if verbose {
+                            println!("{}[V] (pinchtab) descartada: {}{}", YELLOW, url, RESET);
                         }
-                        urls_filtradas.push(url);
-                    } else if verbose {
-                        println!("{}[V] (pinchtab) descartada: {}{}", YELLOW, url, RESET);
                     }
                 }
-            }
-            Err(e) => {
-                eprintln!("{}[!] Falha ao usar pinchtab: {}{}", YELLOW, e, RESET);
+                Err(e) => {
+                    eprintln!("{}[!] Falha ao usar pinchtab (seed {}): {}{}", YELLOW, seed, e, RESET);
+                }
             }
         }
     }
@@ -772,10 +805,10 @@ struct Achado {
 }
 
 #[derive(Clone)]
-#[derive(Clone)]
 struct PinchTabConfig {
     host: String,
     seeds: Vec<String>,
+    scopes: Vec<String>, // lista de domínios/escopos permitidos
 }
 
 // Explora ativamente parÃ¢metros identificados nas URLs
