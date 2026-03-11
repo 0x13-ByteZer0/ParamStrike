@@ -147,7 +147,7 @@ fn main() {
     // Modo padrÃ£o: apenas filtrar URLs passadas por -l
     let (arquivo_entrada, arquivo_saida) = processar_argumentos();
     
-    let pinchtab_cfg = Some(PinchTabConfig { host: pinchtab_host, seeds: pinchtab_seeds, scopes: pinchtab_scopes });
+    // pinchtab_cfg já definido acima
 
     if let Err(e) = filtrar_urls(&arquivo_entrada, &arquivo_saida, verbose, check_status, explorar, usar_ollama, &modelo_ollama, report_prefix, pinchtab_cfg.clone()) {
         eprintln!("{}[âœ—] Erro ao processar o arquivo: {}{}", RED, e, RESET);
