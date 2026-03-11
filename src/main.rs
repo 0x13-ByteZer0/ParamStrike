@@ -179,12 +179,19 @@ fn main() {
         None
     };
 
+    // Token HuggingFace: CLI tem prioridade sobre variável de ambiente HF_TOKEN.
+    let hf_token_cli = args
+        .windows(2)
+        .find(|w| w[0] == "--hf-token")
+        .map(|w| w[1].clone());
+    let hf_token = hf_token_cli.or_else(|| env::var("HF_TOKEN").ok());
+
     // ── Preflight do Unsloth / llama-server ────────────────────────────────
     if usar_unsloth {
         let pronto = preflight_unsloth(&modelo_unsloth, &unsloth_host, verbose);
         if !pronto {
             if unsloth_bootstrap {
-                match bootstrap_unsloth(&modelo_unsloth, &mut unsloth_host, verbose) {
+                match bootstrap_unsloth(&modelo_unsloth, &mut unsloth_host, verbose, hf_token.as_deref()) {
                     Ok(_) => {
                         if !preflight_unsloth(&modelo_unsloth, &unsloth_host, verbose) {
                             eprintln!("{}[✗] Unsloth/llama-server ainda indisponível após bootstrap; desativando validação LLM.{}", YELLOW, RESET);
@@ -302,6 +309,7 @@ fn mostrar_help() {
     println!("  {}  --unsloth-model <m>{}     Modelo Unsloth (padrão: {})", MAGENTA, RESET, UNSLOTH_MODEL_DEFAULT);
     println!("  {}  --unsloth-host <url>{}    Host do llama-server (padrão: {})", MAGENTA, RESET, UNSLOTH_HOST_DEFAULT);
     println!("  {}  --unsloth-bootstrap{}     Baixar modelo recomendado e subir llama-server local automaticamente", MAGENTA, RESET);
+    println!("  {}  --hf-token <t>{}          Token HuggingFace (ou use env HF_TOKEN) para baixar modelos privados", MAGENTA, RESET);
     println!("  {}  --report-prefix <p>{}     Salvar achados em CSV (ex.: relatorio)", MAGENTA, RESET);
     println!("  {}  --pinchtab-start <url>{}  Usar pinchtab para abrir URL no Firefox/Chrome e extrair links", MAGENTA, RESET);
     println!("  {}  --pinchtab-host <host>{}  Host do serviço pinchtab (padrão: http://localhost:9867)", MAGENTA, RESET);
@@ -913,7 +921,7 @@ fn preflight_unsloth(modelo: &str, host: &str, verbose: bool) -> bool {
     }
 }
 
-fn baixar_arquivo(url: &str, destino: &Path) -> std::io::Result<()> {
+fn baixar_arquivo(url: &str, destino: &Path, bearer: Option<&str>) -> std::io::Result<()> {
     let client = Client::builder()
         .timeout(Duration::from_secs(600))
         .build()
@@ -923,15 +931,17 @@ fn baixar_arquivo(url: &str, destino: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
 
-    let mut resp = client
-        .get(url)
-        .send()
-        .map_err(|e| std::io::Error::new(ErrorKind::Other, e.to_string()))?;
+    let mut req = client.get(url);
+    if let Some(tok) = bearer {
+        req = req.header("Authorization", format!("Bearer {}", tok));
+    }
+
+    let mut resp = req.send().map_err(|e| std::io::Error::new(ErrorKind::Other, e.to_string()))?;
 
     if !resp.status().is_success() {
         return Err(std::io::Error::new(
             ErrorKind::Other,
-            format!("HTTP {} ao baixar {}", resp.status(), url),
+            format!("HTTP {} ao baixar {} (adicione --hf-token ou defina HF_TOKEN se o modelo for privado)", resp.status(), url),
         ));
     }
 
@@ -940,7 +950,19 @@ fn baixar_arquivo(url: &str, destino: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn bootstrap_unsloth(modelo: &str, host: &mut String, verbose: bool) -> std::io::Result<()> {
+fn bootstrap_unsloth(modelo: &str, host: &mut String, verbose: bool, hf_token: Option<&str>) -> std::io::Result<()> {
+    if !host.contains("127.0.0.1") && !host.contains("localhost") {
+        return Err(std::io::Error::new(
+            ErrorKind::Other,
+            "bootstrap automático só é suportado para host local (127.0.0.1)",
+        ));
+    }
+
+    println!("{}[*] Iniciando bootstrap do llama-server + modelo recomendado...{}", CYAN, RESET);
+    let base_dir = Path::new(UNSLOTH_DIR_LOCAL);
+    std::fs::create_dir_all(base_dir)?;
+
+fn bootstrap_unsloth(modelo: &str, host: &mut String, verbose: bool, hf_token: Option<&str>) -> std::io::Result<()> {
     if !host.contains("127.0.0.1") && !host.contains("localhost") {
         return Err(std::io::Error::new(
             ErrorKind::Other,
@@ -956,7 +978,7 @@ fn bootstrap_unsloth(modelo: &str, host: &mut String, verbose: bool) -> std::io:
     let modelo_path = base_dir.join(UNSLOTH_MODEL_ARQUIVO_RECOMENDADO);
     if !modelo_path.exists() {
         println!("{}[*] Baixando modelo recomendado (pode demorar, ~4GB)...{}", CYAN, RESET);
-        baixar_arquivo(UNSLOTH_MODEL_URL_RECOMENDADO, &modelo_path)?;
+        baixar_arquivo(UNSLOTH_MODEL_URL_RECOMENDADO, &modelo_path, hf_token)?;
     } else if verbose {
         println!("{}[V] Modelo já encontrado em {}{}", MAGENTA, modelo_path.display(), RESET);
     }
@@ -966,7 +988,7 @@ fn bootstrap_unsloth(modelo: &str, host: &mut String, verbose: bool) -> std::io:
         let bin_path = base_dir.join("llama-server.exe");
         if !bin_path.exists() {
             println!("{}[*] Baixando llama-server (Windows)...{}", CYAN, RESET);
-            baixar_arquivo(LLAMA_SERVER_URL_WIN, &bin_path)?;
+            baixar_arquivo(LLAMA_SERVER_URL_WIN, &bin_path, None)?;
         } else if verbose {
             println!("{}[V] Binário llama-server já presente em {}{}", MAGENTA, bin_path.display(), RESET);
         }
