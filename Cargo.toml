@@ -1,9 +1,15 @@
 [package]
 name = "paramstrike"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 
+[[bin]]
+name = "paramstrike"
+path = "src/main.rs"
+
 [dependencies]
-reqwest = { version = "0.11", features = ["blocking", "json"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+reqwest = { version = "=0.11.20", features = ["blocking", "json", "rustls-tls"], default-features = false }
+serde_json = "=1.0.108"
+rayon = "=1.8.0"
+percent-encoding = "=2.3.0"
+indicatif = "=0.17.7"
