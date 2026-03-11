@@ -103,10 +103,10 @@ fn main() {
         pinchtab_seeds.push(s);
     }
     let mut pinchtab_scopes = Vec::new();
-    if let Some(s) = pinchtab_scope {
-        pinchtab_scopes.push(s);
+    if let Some(ref s) = pinchtab_scope {
+        pinchtab_scopes.push(s.clone());
     }
-    if let Some(scope_path) = pinchtab_scope_file {
+    if let Some(ref scope_path) = pinchtab_scope_file {
         if let Ok(file) = File::open(&scope_path) {
             let reader = BufReader::new(file);
             for line in reader.lines().flatten() {
