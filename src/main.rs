@@ -161,7 +161,19 @@ fn main() {
 
     if let Some(pos) = args.iter().position(|x| x == "-d") {
         if pos + 1 < args.len() {
-            processar_domain_unico(&args[pos + 1], pinchtab_cfg);
+            // Arquivo de saída customizado via -o (padrão: <domínio>_urls_filtradas.txt)
+            let saida = args
+                .windows(2)
+                .find(|w| w[0] == "-o")
+                .map(|w| w[1].clone());
+            processar_domain_unico(
+                &args[pos + 1],
+                saida,
+                verbose, check_status, explorar,
+                usar_ollama, &modelo_ollama,
+                report_prefix.clone(),
+                pinchtab_cfg,
+            );
         } else {
             eprintln!("{}[✗] Erro: Domínio não especificado após a flag -d.{}", RED, RESET);
             process::exit(1);
@@ -171,7 +183,18 @@ fn main() {
 
     if let Some(pos) = args.iter().position(|x| x == "-f") {
         if pos + 1 < args.len() {
-            processar_lista_dominios(&args[pos + 1], pinchtab_cfg);
+            let saida = args
+                .windows(2)
+                .find(|w| w[0] == "-o")
+                .map(|w| w[1].clone());
+            processar_lista_dominios(
+                &args[pos + 1],
+                saida,
+                verbose, check_status, explorar,
+                usar_ollama, &modelo_ollama,
+                report_prefix.clone(),
+                pinchtab_cfg,
+            );
         } else {
             eprintln!("{}[✗] Erro: Arquivo com lista de subdomínios não especificado após a flag -f.{}", RED, RESET);
             process::exit(1);
@@ -267,34 +290,45 @@ fn verificar_atualizacoes() {
     // Substitua pelo repositório real do projeto se necessário.
     let url = "https://api.github.com/repos/0x13-ByteZer0/paramstrike/releases/latest";
 
-    match client
+    // Tenta obter a tag do último release publicado. Se o repositório não tiver
+    // releases (404) ou a requisição falhar por qualquer motivo, exibe apenas a
+    // versão local — nunca bloqueia a execução da ferramenta.
+    let tag_remota: Option<String> = client
         .get(url)
         .header("User-Agent", format!("paramstrike/{}", VERSION))
         .send()
-        .and_then(|r| r.json::<Value>())
-    {
-        Ok(json) => {
-            if let Some(tag) = json.get("tag_name").and_then(|v| v.as_str()) {
-                // Remove prefixo "v" se presente (ex.: "v1.0.1" -> "1.0.1")
-                let versao_remota = tag.trim_start_matches('v');
-                if versao_remota != VERSION {
-                    println!("{}╔══════════════════════════════════════════════════════════════╗{}", YELLOW, RESET);
-                    println!("{}║  ⚠  ATUALIZAÇÃO DISPONÍVEL!                                  ║{}", YELLOW, RESET);
-                    println!("{}║  Instalada: {:10}  |  Nova: {:10}                  ║{}", YELLOW, VERSION, versao_remota, RESET);
-                    println!("{}║  Execute:  $ paramstrike -up                                  ║{}", YELLOW, RESET);
-                    println!("{}╚══════════════════════════════════════════════════════════════╝{}", YELLOW, RESET);
+        .ok()
+        .and_then(|resp| {
+            let ok = resp.status().is_success();
+            resp.json::<Value>().ok().and_then(|json| {
+                if ok {
+                    json.get("tag_name")
+                        .and_then(|v| v.as_str())
+                        .map(|t| t.trim_start_matches('v').to_string())
                 } else {
-                    println!("{}╔══════════════════════════════════════════════════════════════╗{}", GREEN, RESET);
-                    println!("{}║  ✔  FERRAMENTA ATUALIZADA  │  Versão: {:10}            ║{}", GREEN, VERSION, RESET);
-                    println!("{}╚══════════════════════════════════════════════════════════════╝{}", GREEN, RESET);
+                    None // 404 = sem releases ainda; ignora silenciosamente
                 }
-            } else {
-                println!("{}[!] Não foi possível determinar a versão remota (resposta inesperada).{}", YELLOW, RESET);
-            }
+            })
+        });
+
+    match tag_remota {
+        Some(ref remota) if remota.as_str() != VERSION => {
+            println!("{}╔══════════════════════════════════════════════════════════════╗{}", YELLOW, RESET);
+            println!("{}║  ⚠  ATUALIZAÇÃO DISPONÍVEL!                                  ║{}", YELLOW, RESET);
+            println!("{}║  Instalada: {:10}  |  Nova: {:10}                  ║{}", YELLOW, VERSION, remota, RESET);
+            println!("{}║  Execute:  $ paramstrike -up                                  ║{}", YELLOW, RESET);
+            println!("{}╚══════════════════════════════════════════════════════════════╝{}", YELLOW, RESET);
         }
-        Err(_) => {
-            // Falha silenciosa: sem acesso à internet não deve impedir o uso da ferramenta.
-            println!("{}[!] Sem acesso à internet — verificação de atualização pulada. Versão local: {}{}", YELLOW, VERSION, RESET);
+        Some(_) => {
+            println!("{}╔══════════════════════════════════════════════════════════════╗{}", GREEN, RESET);
+            println!("{}║  ✔  FERRAMENTA ATUALIZADA  │  Versão: {:10}            ║{}", GREEN, VERSION, RESET);
+            println!("{}╚══════════════════════════════════════════════════════════════╝{}", GREEN, RESET);
+        }
+        None => {
+            // Sem releases publicadas ou sem rede: mostra versão local, não bloqueia.
+            println!("{}╔══════════════════════════════════════════════════════════════╗{}", GREEN, RESET);
+            println!("{}║  ✔  Versão: {:10}  (sem releases remotas disponíveis) ║{}", GREEN, VERSION, RESET);
+            println!("{}╚══════════════════════════════════════════════════════════════╝{}", GREEN, RESET);
         }
     }
     println!();
@@ -440,8 +474,6 @@ fn filtrar_urls(
         ));
     }
 
-    let file   = File::open(arquivo_entrada)?;
-    let reader = BufReader::new(file);
 
     let mut urls_filtradas = Vec::new();
     let mut total_urls     = 0usize;
@@ -1086,11 +1118,21 @@ fn executar_urlfinder(arquivo_subs: &str, arquivo_urls: &str) -> std::io::Result
 }
 
 // ─── Modos de operação ────────────────────────────────────────────────────────
-fn processar_domain_unico(domain: &str, pinchtab_cfg: Option<PinchTabConfig>) {
+fn processar_domain_unico(
+    domain: &str,
+    saida_custom: Option<String>,
+    verbose: bool,
+    check_status: bool,
+    explorar: bool,
+    usar_ollama: bool,
+    modelo_ollama: &str,
+    report_prefix: Option<String>,
+    pinchtab_cfg: Option<PinchTabConfig>,
+) {
     println!("{}[*] Iniciando processo para domínio: {}{}\n", CYAN, domain, RESET);
-    let subs_file  = "dominios_temp.txt";
-    let urls_file  = "urls_temp.txt";
-    let resultado  = format!("{}_urls_filtradas.txt", domain);
+    let subs_file = "dominios_temp.txt";
+    let urls_file = "urls_temp.txt";
+    let resultado = saida_custom.unwrap_or_else(|| format!("{}_urls_filtradas.txt", domain));
 
     if let Err(e) = executar_subfinder(domain, subs_file) {
         eprintln!("{}[✗] Erro no subfinder: {}{}", RED, e, RESET);
@@ -1105,7 +1147,12 @@ fn processar_domain_unico(domain: &str, pinchtab_cfg: Option<PinchTabConfig>) {
 
     println!("\n{}[*] Iniciando filtragem de URLs{}\n", BLUE, RESET);
 
-    if let Err(e) = filtrar_urls(urls_file, &resultado, false, false, false, false, OLLAMA_MODEL_DEFAULT, None, pinchtab_cfg) {
+    if let Err(e) = filtrar_urls(
+        urls_file, &resultado,
+        verbose, check_status, explorar,
+        usar_ollama, modelo_ollama,
+        report_prefix, pinchtab_cfg,
+    ) {
         eprintln!("{}[✗] Erro ao filtrar URLs: {}{}", RED, e, RESET);
         process::exit(1);
     }
@@ -1115,17 +1162,27 @@ fn processar_domain_unico(domain: &str, pinchtab_cfg: Option<PinchTabConfig>) {
     println!("{}[✔] Processo concluído! Resultados em: {}{}", GREEN, resultado, RESET);
 }
 
-fn processar_lista_dominios(arquivo_subs: &str, pinchtab_cfg: Option<PinchTabConfig>) {
+fn processar_lista_dominios(
+    arquivo_subs: &str,
+    saida_custom: Option<String>,
+    verbose: bool,
+    check_status: bool,
+    explorar: bool,
+    usar_ollama: bool,
+    modelo_ollama: &str,
+    report_prefix: Option<String>,
+    pinchtab_cfg: Option<PinchTabConfig>,
+) {
     println!("{}[*] Iniciando processo para lista de subdomínios: {}{}\n", CYAN, arquivo_subs, RESET);
 
-    // CORREÇÃO #8: valida existência do arquivo antes de prosseguir.
+    // Valida existência do arquivo antes de prosseguir.
     if !PathBuf::from(arquivo_subs).exists() {
         eprintln!("{}[✗] Arquivo não encontrado: {}{}", RED, arquivo_subs, RESET);
         process::exit(1);
     }
 
-    let urls_file     = "urls_crawled.txt";
-    let resultado_file = "urls_filtradas_lote.txt";
+    let urls_file      = "urls_crawled.txt";
+    let resultado_file = saida_custom.unwrap_or_else(|| "urls_filtradas_lote.txt".to_string());
 
     if let Ok(file) = File::open(arquivo_subs) {
         println!("{}[+] {} subdomínios para processar{}", GREEN, BufReader::new(file).lines().count(), RESET);
@@ -1140,7 +1197,12 @@ fn processar_lista_dominios(arquivo_subs: &str, pinchtab_cfg: Option<PinchTabCon
 
     println!("\n{}[*] Iniciando filtragem de URLs{}\n", BLUE, RESET);
 
-    if let Err(e) = filtrar_urls(urls_file, resultado_file, false, false, false, false, OLLAMA_MODEL_DEFAULT, None, pinchtab_cfg) {
+    if let Err(e) = filtrar_urls(
+        urls_file, &resultado_file,
+        verbose, check_status, explorar,
+        usar_ollama, modelo_ollama,
+        report_prefix, pinchtab_cfg,
+    ) {
         eprintln!("{}[✗] Erro ao filtrar URLs: {}{}", RED, e, RESET);
         process::exit(1);
     }
