@@ -29,8 +29,14 @@ const CYAN:    &str = "\x1b[96m";
 const RESET:   &str = "\x1b[0m";
 const BOLD:    &str = "\x1b[1m";
 
-// ─── Configuração Ollama ──────────────────────────────────────────────────────
-const OLLAMA_MODEL_DEFAULT: &str = "phi3:mini";
+// ─── Configuração Unsloth (llama-server / OpenAI-compat) ─────────────────────
+// O Unsloth serve modelos via llama-server com endpoint compatível com a API
+// OpenAI. Inicie o servidor com:
+//   ./llama-server --model <modelo.gguf> --port 8001 --host 0.0.0.0 --jinja
+// O modelo padrão abaixo deve corresponder ao alias passado em --alias ao
+// iniciar o llama-server.
+const UNSLOTH_MODEL_DEFAULT: &str = "unsloth/Qwen3-8B";
+const UNSLOTH_HOST_DEFAULT:  &str = "http://127.0.0.1:8001";
 
 // CORREÇÃO #12: constante nomeada para o limite de preview do corpo da resposta.
 const MAX_CHARS_PREVIEW_CORPO: usize = 8_000;
@@ -99,14 +105,20 @@ fn main() {
 
     let verbose      = args.contains(&"-v".to_string()) || args.contains(&"--verbose".to_string());
     let check_status = args.contains(&"-status".to_string()) || args.contains(&"--status".to_string());
-    let usar_ollama  = args.contains(&"--ollama".to_string());
-    let explorar     = args.contains(&"-p".to_string()) || args.contains(&"--explore".to_string()) || usar_ollama;
+    let usar_unsloth  = args.contains(&"--unsloth".to_string());
+    let explorar      = args.contains(&"-p".to_string()) || args.contains(&"--explore".to_string()) || usar_unsloth;
 
-    let modelo_ollama = args
+    let modelo_unsloth = args
         .windows(2)
-        .find(|w| w[0] == "--ollama-model")
+        .find(|w| w[0] == "--unsloth-model")
         .map(|w| w[1].clone())
-        .unwrap_or_else(|| OLLAMA_MODEL_DEFAULT.to_string());
+        .unwrap_or_else(|| UNSLOTH_MODEL_DEFAULT.to_string());
+
+    let unsloth_host = args
+        .windows(2)
+        .find(|w| w[0] == "--unsloth-host")
+        .map(|w| w[1].clone())
+        .unwrap_or_else(|| UNSLOTH_HOST_DEFAULT.to_string());
 
     let report_prefix = args
         .windows(2)
@@ -170,7 +182,7 @@ fn main() {
                 &args[pos + 1],
                 saida,
                 verbose, check_status, explorar,
-                usar_ollama, &modelo_ollama,
+                usar_unsloth, &modelo_unsloth, &unsloth_host,
                 report_prefix.clone(),
                 pinchtab_cfg,
             );
@@ -191,7 +203,7 @@ fn main() {
                 &args[pos + 1],
                 saida,
                 verbose, check_status, explorar,
-                usar_ollama, &modelo_ollama,
+                usar_unsloth, &modelo_unsloth, &unsloth_host,
                 report_prefix.clone(),
                 pinchtab_cfg,
             );
@@ -207,7 +219,7 @@ fn main() {
     if let Err(e) = filtrar_urls(
         &arquivo_entrada, &arquivo_saida,
         verbose, check_status, explorar,
-        usar_ollama, &modelo_ollama,
+        usar_unsloth, &modelo_unsloth, &unsloth_host,
         report_prefix, pinchtab_cfg,
     ) {
         eprintln!("{}[✗] Erro ao processar o arquivo: {}{}", RED, e, RESET);
@@ -254,8 +266,9 @@ fn mostrar_help() {
     println!("  {}  -v, --verbose{}           Modo verbose (mostra fluxo de processamento)", MAGENTA, RESET);
     println!("  {}  -status{}                 Verificar status HTTP e salvar em arquivos separados", MAGENTA, RESET);
     println!("  {}  -p, --explore{}           Explorar ativamente os parâmetros (SQLi/XSS/IDOR)", MAGENTA, RESET);
-    println!("  {}  --ollama{}                Validar achados com Ollama (desliga falsos positivos)", MAGENTA, RESET);
-    println!("  {}  --ollama-model <m>{}      Modelo Ollama (padrão: {})", MAGENTA, RESET, OLLAMA_MODEL_DEFAULT);
+    println!("  {}  --unsloth{}               Validar achados com Unsloth/llama-server (reduz falsos positivos)", MAGENTA, RESET);
+    println!("  {}  --unsloth-model <m>{}     Modelo Unsloth (padrão: {})", MAGENTA, RESET, UNSLOTH_MODEL_DEFAULT);
+    println!("  {}  --unsloth-host <url>{}    Host do llama-server (padrão: {})", MAGENTA, RESET, UNSLOTH_HOST_DEFAULT);
     println!("  {}  --report-prefix <p>{}     Salvar achados em CSV (ex.: relatorio)", MAGENTA, RESET);
     println!("  {}  --pinchtab-start <url>{}  Usar pinchtab para abrir URL no Firefox/Chrome e extrair links", MAGENTA, RESET);
     println!("  {}  --pinchtab-host <host>{}  Host do serviço pinchtab (padrão: http://localhost:9867)", MAGENTA, RESET);
@@ -266,7 +279,7 @@ fn mostrar_help() {
     println!("{}Exemplos:{}", BOLD, RESET);
     println!("  {}$ paramstrike -l urls.txt -o resultado.txt{}", GREEN, RESET);
     println!("  {}$ paramstrike -l urls.txt -o resultado.txt -p{}", GREEN, RESET);
-    println!("  {}$ paramstrike -l urls.txt -o resultado.txt -p --ollama --ollama-model {}{}", GREEN, OLLAMA_MODEL_DEFAULT, RESET);
+    println!("  {}$ paramstrike -l urls.txt -o resultado.txt -p --unsloth --unsloth-model {} --unsloth-host http://127.0.0.1:8001{}", GREEN, UNSLOTH_MODEL_DEFAULT, RESET);
     println!("  {}$ paramstrike -l urls.txt -o resultado.txt -p --report-prefix relatorio{}", GREEN, RESET);
     println!("  {}$ paramstrike -d example.com{}", GREEN, RESET);
     println!("  {}$ paramstrike -f subs.txt{}\n", GREEN, RESET);
@@ -460,8 +473,9 @@ fn filtrar_urls(
     verbose: bool,
     check_status: bool,
     explorar: bool,
-    usar_ollama: bool,
-    modelo_ollama: &str,
+    usar_unsloth: bool,
+    modelo_unsloth: &str,
+    unsloth_host: &str,
     report_prefix: Option<String>,
     pinchtab_cfg: Option<PinchTabConfig>,
 ) -> std::io::Result<()> {
@@ -484,7 +498,7 @@ fn filtrar_urls(
         println!("{}[V] Modo verbose ativado{}", MAGENTA, RESET);
         println!("{}[V] Verificação de status: {}{}", MAGENTA, check_status, RESET);
         println!("{}[V] Exploração ativa: {}{}", MAGENTA, explorar, RESET);
-        println!("{}[V] Validação Ollama: {} | Modelo: {}{}", MAGENTA, usar_ollama, modelo_ollama, RESET);
+        println!("{}[V] Validação Unsloth: {} | Modelo: {} | Host: {}{}", MAGENTA, usar_unsloth, modelo_unsloth, unsloth_host, RESET);
         if let Some(prefix) = &report_prefix {
             println!("{}[V] Relatório CSV prefixo: {}{}", MAGENTA, prefix, RESET);
         }
@@ -640,8 +654,9 @@ fn filtrar_urls(
         explorar_vulnerabilidades(
             &urls_filtradas,
             verbose,
-            usar_ollama,
-            modelo_ollama,
+            usar_unsloth,
+            modelo_unsloth,
+            unsloth_host,
             report_prefix.as_deref(),
         )?;
     }
@@ -817,8 +832,9 @@ struct PinchTabConfig {
 fn explorar_vulnerabilidades(
     urls: &[String],
     verbose: bool,
-    usar_ollama: bool,
+    usar_unsloth: bool,
     modelo: &str,
+    unsloth_host: &str,
     report_prefix: Option<&str>,
 ) -> std::io::Result<()> {
     println!("{}[*] Explorando parâmetros suspeitos (SQLi/XSS/IDOR) em paralelo...{}", BLUE, RESET);
@@ -949,10 +965,10 @@ fn explorar_vulnerabilidades(
         println!("{}[-] Nenhum comportamento suspeito detectado nos testes básicos.{}", BLUE, RESET);
     }
 
-    if usar_ollama && !achados_final.is_empty() {
-        validar_com_ollama(modelo, &mut achados_final, verbose)?;
-    } else if usar_ollama {
-        println!("{}[LLM] Nenhum achado para validar com Ollama.{}", BLUE, RESET);
+    if usar_unsloth && !achados_final.is_empty() {
+        validar_com_unsloth(modelo, unsloth_host, &mut achados_final, verbose)?;
+    } else if usar_unsloth {
+        println!("{}[LLM] Nenhum achado para validar com Unsloth.{}", BLUE, RESET);
     }
 
     if let Some(prefix) = report_prefix {
@@ -962,70 +978,154 @@ fn explorar_vulnerabilidades(
     Ok(())
 }
 
-// ─── Validação com Ollama ─────────────────────────────────────────────────────
-// CORREÇÃO #10: adicionado timeout de 60 s via `wait_timeout` para evitar que
-// um modelo travado congele a ferramenta indefinidamente.
-fn validar_com_ollama(modelo: &str, achados: &mut [Achado], verbose: bool) -> std::io::Result<()> {
-    println!("{}[*] Validando achados com Ollama (modelo: {}){}", CYAN, modelo, RESET);
+// ─── Validação com Unsloth (llama-server / OpenAI-compat) ───────────────────
+// Faz chamadas HTTP ao endpoint POST /v1/chat/completions do llama-server,
+// que é totalmente compatível com a API OpenAI. Não exige nenhum processo
+// filho — é puro HTTP com reqwest. O timeout é configurado no client (120 s).
+//
+// O modelo pode gerar dois tipos de resposta:
+//   • Classificação de achado:  "true_positive" ou "false_positive" + justificativa
+//   • Sugestão de exploit extra: lista JSON de payloads adicionais para testar
+fn validar_com_unsloth(
+    modelo: &str,
+    host: &str,
+    achados: &mut [Achado],
+    verbose: bool,
+) -> std::io::Result<()> {
+    println!("{}[*] Validando achados com Unsloth/llama-server (modelo: {} @ {}){}", CYAN, modelo, host, RESET);
+
+    // Client dedicado com timeout generoso para modelos grandes.
+    let client = Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+    let endpoint = format!("{}/v1/chat/completions", host.trim_end_matches('/'));
 
     for achado in achados.iter_mut() {
-        let prompt = format!(
-            "Classifique rapidamente se este achado de segurança é provavelmente verdadeiro ou \
-falso positivo.\nTipo: {tipo}\nURL: {url}\nParâmetro: {param}\nPayload: {payload}\n\
-Trecho de resposta (pode estar truncado):\n{corpo}\n\
-Responda somente com 'true_positive' ou 'false_positive' e uma curta justificativa em português.",
+        // ── Prompt de classificação ───────────────────────────────────────────
+        // O modelo retorna "true_positive" ou "false_positive" na primeira linha,
+        // seguido de uma justificativa curta e, opcionalmente, uma seção
+        // "PAYLOADS_EXTRAS:" com sugestões de novos vetores para testar.
+        let prompt_sistema = "Você é um especialista em segurança ofensiva (pentest/bug bounty). Analise achados de vulnerabilidades web e classifique se são verdadeiros ou falsos positivos. Seja objetivo e técnico. Quando o achado for verdadeiro, sugira payloads adicionais na seção PAYLOADS_EXTRAS: (um por linha, formato JSON array). Responda sempre em português.";
+
+        let prompt_usuario = format!(
+            "Classifique o achado abaixo:
+
+Tipo: {tipo}
+URL:  {url}
+Parâmetro: {param}
+Payload testado: {payload}
+Trecho da resposta HTTP (truncado a {max} chars):
+---
+{corpo}
+---
+
+Responda na seguinte estrutura exata:
+CLASSIFICAÇÃO: true_positive | false_positive
+JUSTIFICATIVA: <texto curto>
+PAYLOADS_EXTRAS: <JSON array de strings, ou [] se falso positivo>",
             tipo    = achado.tipo,
             url     = achado.url,
             param   = achado.parametro,
             payload = achado.payload,
             corpo   = achado.corpo,
+            max     = MAX_CHARS_PREVIEW_CORPO,
         );
 
-        match Command::new("ollama")
-            .arg("run")
-            .arg(modelo)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-        {
-            Ok(mut child) => {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(prompt.as_bytes());
-                }
+        let body = serde_json::json!({
+            "model": modelo,
+            "messages": [
+                {"role": "system", "content": prompt_sistema},
+                {"role": "user",   "content": prompt_usuario}
+            ],
+            "temperature": 0.1,   // baixa temperatura = respostas mais determinísticas
+            "max_tokens":  512
+        });
 
-                // Timeout de 60 s: se o modelo não responder, abandona este achado.
-                let timeout = Duration::from_secs(60);
-                let started = std::time::Instant::now();
-                loop {
-                    match child.try_wait() {
-                        Ok(Some(_)) => break,
-                        Ok(None) if started.elapsed() >= timeout => {
-                            eprintln!("{}[LLM] Timeout ao aguardar Ollama para {}. Pulando.{}", YELLOW, achado.url, RESET);
-                            let _ = child.kill();
-                            break;
+        match client.post(&endpoint).json(&body).send() {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<Value>() {
+                    Ok(json) => {
+                        // Extrai o conteúdo da mensagem do assistente
+                        let texto = json
+                            .pointer("/choices/0/message/content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+
+                        if verbose {
+                            println!("{}[LLM] Resposta completa:
+{}{}", CYAN, texto, RESET);
                         }
-                        Ok(None) => std::thread::sleep(Duration::from_millis(200)),
-                        Err(e) => {
-                            eprintln!("{}[LLM] Erro ao aguardar processo: {}{}", YELLOW, e, RESET);
-                            break;
+
+                        // Exibe classificação resumida
+                        let classificacao = if texto.to_lowercase().contains("true_positive") {
+                            format!("{}TRUE POSITIVE{}", RED, RESET)
+                        } else if texto.to_lowercase().contains("false_positive") {
+                            format!("{}false_positive{}", BLUE, RESET)
+                        } else {
+                            format!("{}indefinido{}", YELLOW, RESET)
+                        };
+                        println!("{}[LLM]{} {} → {} | URL: {}", CYAN, RESET, achado.tipo, classificacao, achado.url);
+
+                        // Extrai payloads extras sugeridos pelo modelo
+                        if let Some(inicio) = texto.find("PAYLOADS_EXTRAS:") {
+                            let trecho = texto[inicio + "PAYLOADS_EXTRAS:".len()..].trim();
+                            // Tenta fazer parse do JSON array
+                            if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(
+                                trecho.lines().next().unwrap_or("[]")
+                            ) {
+                                let extras: Vec<String> = arr
+                                    .iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect();
+                                if !extras.is_empty() {
+                                    println!("{}  [LLM] Payloads extras sugeridos ({}):{}", MAGENTA, extras.len(), RESET);
+                                    for p in &extras {
+                                        println!("{}    → {}{}", MAGENTA, p, RESET);
+                                    }
+                                    // Salva os extras no campo llm para o relatório CSV
+                                    let llm_resumo = format!("{} | extras: {}", texto.lines().take(2).collect::<Vec<_>>().join(" "), extras.join(", "));
+                                    achado.llm = Some(llm_resumo);
+                                } else {
+                                    achado.llm = Some(texto.lines().take(2).collect::<Vec<_>>().join(" "));
+                                }
+                            } else {
+                                achado.llm = Some(texto.lines().take(2).collect::<Vec<_>>().join(" "));
+                            }
+                        } else {
+                            achado.llm = Some(texto.lines().take(2).collect::<Vec<_>>().join(" "));
                         }
                     }
-                }
-
-                match child.wait_with_output() {
-                    Ok(out) => {
-                        let resposta = String::from_utf8_lossy(&out.stdout);
-                        println!("{}[LLM] {} -> {}{}", GREEN, achado.url, resposta.trim(), RESET);
-                        achado.llm = Some(resposta.trim().to_string());
+                    Err(e) => {
+                        eprintln!("{}[LLM] Falha ao parsear resposta JSON: {}{}", YELLOW, e, RESET);
                     }
-                    Err(e) => eprintln!("{}[LLM] Falha ao ler saída: {}{}", YELLOW, e, RESET),
                 }
             }
-            Err(e) => {
-                eprintln!("{}[LLM] Não foi possível executar ollama: {}{}", YELLOW, e, RESET);
+            Ok(resp) => {
+                let status = resp.status();
+                let body_err = resp.text().unwrap_or_default();
+                eprintln!("{}[LLM] llama-server retornou HTTP {}: {}{}", YELLOW, status, body_err, RESET);
                 if verbose {
-                    eprintln!("{}[V] Instale ollama ou remova --ollama para continuar sem validação.{}", YELLOW, RESET);
+                    eprintln!("{}[V] Verifique se o llama-server está rodando em {} com o modelo '{}'.{}", YELLOW, host, modelo, RESET);
                 }
+            }
+            Err(e) if e.is_timeout() => {
+                eprintln!("{}[LLM] Timeout (120 s) ao contatar llama-server para {}. Pulando.{}", YELLOW, achado.url, RESET);
+            }
+            Err(e) if e.is_connect() => {
+                eprintln!(
+                    "{}[LLM] Não foi possível conectar ao llama-server em {}.
+                     {}      Inicie o servidor com: ./llama-server --model <modelo.gguf> --port 8001 --host 0.0.0.0 --jinja{}",
+                    YELLOW, host, YELLOW, RESET
+                );
+                // Se não conseguiu conectar, não tenta os próximos achados — servidor está offline.
+                break;
+            }
+            Err(e) => {
+                eprintln!("{}[LLM] Erro de rede: {}{}", YELLOW, e, RESET);
             }
         }
     }
@@ -1124,8 +1224,9 @@ fn processar_domain_unico(
     verbose: bool,
     check_status: bool,
     explorar: bool,
-    usar_ollama: bool,
-    modelo_ollama: &str,
+    usar_unsloth: bool,
+    modelo_unsloth: &str,
+    unsloth_host: &str,
     report_prefix: Option<String>,
     pinchtab_cfg: Option<PinchTabConfig>,
 ) {
@@ -1150,7 +1251,7 @@ fn processar_domain_unico(
     if let Err(e) = filtrar_urls(
         urls_file, &resultado,
         verbose, check_status, explorar,
-        usar_ollama, modelo_ollama,
+        usar_unsloth, modelo_unsloth, unsloth_host,
         report_prefix, pinchtab_cfg,
     ) {
         eprintln!("{}[✗] Erro ao filtrar URLs: {}{}", RED, e, RESET);
@@ -1168,8 +1269,9 @@ fn processar_lista_dominios(
     verbose: bool,
     check_status: bool,
     explorar: bool,
-    usar_ollama: bool,
-    modelo_ollama: &str,
+    usar_unsloth: bool,
+    modelo_unsloth: &str,
+    unsloth_host: &str,
     report_prefix: Option<String>,
     pinchtab_cfg: Option<PinchTabConfig>,
 ) {
@@ -1200,7 +1302,7 @@ fn processar_lista_dominios(
     if let Err(e) = filtrar_urls(
         urls_file, &resultado_file,
         verbose, check_status, explorar,
-        usar_ollama, modelo_ollama,
+        usar_unsloth, modelo_unsloth, unsloth_host,
         report_prefix, pinchtab_cfg,
     ) {
         eprintln!("{}[✗] Erro ao filtrar URLs: {}{}", RED, e, RESET);
