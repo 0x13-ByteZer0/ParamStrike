@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{self, Command, Stdio};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use reqwest::blocking::Client;
 use serde_json::Value;
@@ -118,7 +118,13 @@ fn main() {
         }
     }
 
-    let pinchtab_cfg = Some(PinchTabConfig { host: pinchtab_host.clone(), seeds: pinchtab_seeds, scopes: pinchtab_scopes });
+    // Ativa pinchtab somente se alguma flag relacionada foi passada
+    let pinchtab_enabled = pinchtab_start.is_some() || pinchtab_scope.is_some() || pinchtab_scope_file.is_some();
+    let pinchtab_cfg = if pinchtab_enabled {
+        Some(PinchTabConfig { host: pinchtab_host.clone(), seeds: pinchtab_seeds, scopes: pinchtab_scopes })
+    } else {
+        None
+    };
     
     // Verifica se Ã© passado um domÃ­nio Ãºnico (-d)
     if let Some(pos) = args.iter().position(|x| x == "-d") {
@@ -522,18 +528,38 @@ fn filtrar_urls(
     }
 
     // URLs coletadas via pinchtab
-    if let Some(mut cfg) = pinchtab_cfg {
+    if let Some(cfg) = pinchtab_cfg {
         if verbose {
             println!("{}[*] Coletando links com pinchtab...{}", CYAN, RESET);
         }
-        cfg.seeds.extend(urls_cruas.iter().cloned());
+
+        // seeds: só as passadas pelo usuário; se não vier nenhuma, usa URLs já filtradas
+        let mut seeds: Vec<String> = if cfg.seeds.is_empty() {
+            urls_filtradas.clone()
+        } else {
+            cfg.seeds.clone()
+        };
+
+        // limpa seeds inválidas e aplica scope
+        seeds.retain(|s| !s.trim().is_empty());
+        seeds.retain(|s| s.starts_with("http"));
+        seeds.retain(|s| !tem_extensao_remover(s));
         if !cfg.scopes.is_empty() {
-            cfg.seeds.retain(|s| cfg.scopes.iter().any(|dom| s.contains(dom)));
-            if verbose {
-                println!("{}[V] pinchtab scopes aplicados: {} seeds após filtro{}", MAGENTA, cfg.seeds.len(), RESET);
-            }
+            seeds.retain(|s| cfg.scopes.iter().any(|dom| s.contains(dom)));
         }
-        for seed in cfg.seeds.iter() {
+
+        // de-dup e limita para evitar tempestade de requisições
+        let mut uniq = HashSet::new();
+        seeds.retain(|s| uniq.insert(s.clone()));
+        const MAX_PINCHTAB_SEEDS: usize = 50;
+        if seeds.len() > MAX_PINCHTAB_SEEDS {
+            if verbose {
+                println!("{}[V] pinchtab seeds reduzidas de {} para {} (limite){}", YELLOW, seeds.len(), MAX_PINCHTAB_SEEDS, RESET);
+            }
+            seeds.truncate(MAX_PINCHTAB_SEEDS);
+        }
+
+        for seed in seeds.iter() {
             match coletar_urls_pinchtab(&cfg.host, seed, verbose) {
                 Ok(colhidas) => {
                     for url in colhidas {
