@@ -689,7 +689,13 @@ fn construir_url_injetada(url: &str, alvo: &str, payload: &str) -> Option<String
     let mut alterou = false;
     for (k, v) in pares.iter_mut() {
         if k == alvo {
-            *v = url_encode(payload);
+            // injeta cru por padrão; aplica percent-encode somente se contiver '&' para não quebrar a separação de parâmetros
+            let needs_encode = payload.contains('&');
+            *v = if needs_encode {
+                url_encode(payload)
+            } else {
+                payload.to_string()
+            };
             alterou = true;
         }
     }
