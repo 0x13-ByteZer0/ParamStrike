@@ -1,11 +1,12 @@
 ﻿use std::env;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write, ErrorKind};
+use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use reqwest::blocking::Client;
 use serde_json::Value;
 use rayon::prelude::*;
@@ -35,8 +36,13 @@ const BOLD:    &str = "\x1b[1m";
 //   ./llama-server --model <modelo.gguf> --port 8001 --host 0.0.0.0 --jinja
 // O modelo padrão abaixo deve corresponder ao alias passado em --alias ao
 // iniciar o llama-server.
-const UNSLOTH_MODEL_DEFAULT: &str = "unsloth/Qwen3-8B";
+// Modelo recomendado (mar/2026): Qwen 3.5 8B Instruct em GGUF quantizado moderado.
+const UNSLOTH_MODEL_DEFAULT: &str = "unsloth/Qwen3.5-8B-Instruct-GGUF";
 const UNSLOTH_HOST_DEFAULT:  &str = "http://127.0.0.1:8001";
+const UNSLOTH_MODEL_URL_RECOMENDADO: &str = "https://huggingface.co/unsloth/Qwen3.5-8B-Instruct-GGUF/resolve/main/Qwen3.5-8B-Instruct-Q4_K_M.gguf";
+const UNSLOTH_MODEL_ARQUIVO_RECOMENDADO: &str = "Qwen3.5-8B-Instruct-Q4_K_M.gguf";
+const UNSLOTH_DIR_LOCAL: &str = "unsloth_local";
+const LLAMA_SERVER_URL_WIN: &str = "https://github.com/ggerganov/llama.cpp/releases/download/b3608/llama-server.exe";
 
 // CORREÇÃO #12: constante nomeada para o limite de preview do corpo da resposta.
 const MAX_CHARS_PREVIEW_CORPO: usize = 8_000;
@@ -105,7 +111,8 @@ fn main() {
 
     let verbose      = args.contains(&"-v".to_string()) || args.contains(&"--verbose".to_string());
     let check_status = args.contains(&"-status".to_string()) || args.contains(&"--status".to_string());
-    let usar_unsloth  = args.contains(&"--unsloth".to_string());
+    let mut usar_unsloth  = args.contains(&"--unsloth".to_string());
+    let unsloth_bootstrap = args.contains(&"--unsloth-bootstrap".to_string());
     let explorar      = args.contains(&"-p".to_string()) || args.contains(&"--explore".to_string()) || usar_unsloth;
 
     let modelo_unsloth = args
@@ -114,7 +121,7 @@ fn main() {
         .map(|w| w[1].clone())
         .unwrap_or_else(|| UNSLOTH_MODEL_DEFAULT.to_string());
 
-    let unsloth_host = args
+    let mut unsloth_host = args
         .windows(2)
         .find(|w| w[0] == "--unsloth-host")
         .map(|w| w[1].clone())
@@ -170,6 +177,30 @@ fn main() {
     } else {
         None
     };
+
+    // ── Preflight do Unsloth / llama-server ────────────────────────────────
+    if usar_unsloth {
+        let pronto = preflight_unsloth(&modelo_unsloth, &unsloth_host, verbose);
+        if !pronto {
+            if unsloth_bootstrap {
+                match bootstrap_unsloth(&modelo_unsloth, &mut unsloth_host, verbose) {
+                    Ok(_) => {
+                        if !preflight_unsloth(&modelo_unsloth, &unsloth_host, verbose) {
+                            eprintln!("{}[✗] Unsloth/llama-server ainda indisponível após bootstrap; desativando validação LLM.{}", YELLOW, RESET);
+                            usar_unsloth = false;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{}[✗] Falha no bootstrap do Unsloth: {}{}", YELLOW, e, RESET);
+                        usar_unsloth = false;
+                    }
+                }
+            } else {
+                eprintln!("{}[!] Unsloth/llama-server não acessível ou modelo ausente. Adicione --unsloth-bootstrap para instalar/baixar automaticamente ou configure manualmente.{}", YELLOW, RESET);
+                usar_unsloth = false;
+            }
+        }
+    }
 
     if let Some(pos) = args.iter().position(|x| x == "-d") {
         if pos + 1 < args.len() {
@@ -269,6 +300,7 @@ fn mostrar_help() {
     println!("  {}  --unsloth{}               Validar achados com Unsloth/llama-server (reduz falsos positivos)", MAGENTA, RESET);
     println!("  {}  --unsloth-model <m>{}     Modelo Unsloth (padrão: {})", MAGENTA, RESET, UNSLOTH_MODEL_DEFAULT);
     println!("  {}  --unsloth-host <url>{}    Host do llama-server (padrão: {})", MAGENTA, RESET, UNSLOTH_HOST_DEFAULT);
+    println!("  {}  --unsloth-bootstrap{}     Baixar modelo recomendado e subir llama-server local automaticamente", MAGENTA, RESET);
     println!("  {}  --report-prefix <p>{}     Salvar achados em CSV (ex.: relatorio)", MAGENTA, RESET);
     println!("  {}  --pinchtab-start <url>{}  Usar pinchtab para abrir URL no Firefox/Chrome e extrair links", MAGENTA, RESET);
     println!("  {}  --pinchtab-host <host>{}  Host do serviço pinchtab (padrão: http://localhost:9867)", MAGENTA, RESET);
@@ -667,19 +699,42 @@ fn filtrar_urls(
 
 // ─── Salvar com anew ──────────────────────────────────────────────────────────
 fn salvar_com_anew(arquivo: &str, urls: &[String]) -> std::io::Result<()> {
-    let mut child = Command::new("anew")
+    match Command::new("anew")
         .arg(arquivo)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .spawn()?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        for url in urls {
-            writeln!(stdin, "{}", url)?;
+        .spawn()
+    {
+        Ok(mut child) => {
+            if let Some(mut stdin) = child.stdin.take() {
+                for url in urls {
+                    writeln!(stdin, "{}", url)?;
+                }
+            }
+            let status = child.wait()?;
+            if status.success() { Ok(()) } else {
+                Err(std::io::Error::new(ErrorKind::Other, format!("anew retornou código {}", status)))
+            }
         }
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            // Fallback leve: deduplica e grava com std::fs quando o binário `anew` não está disponível.
+            let mut existentes = HashSet::new();
+            if let Ok(file) = File::open(arquivo) {
+                for line in BufReader::new(file).lines().flatten() {
+                    existentes.insert(line);
+                }
+            }
+
+            let mut file = OpenOptions::new().create(true).append(true).open(arquivo)?;
+            for url in urls {
+                if existentes.insert(url.clone()) {
+                    writeln!(file, "{}", url)?;
+                }
+            }
+            Ok(())
+        }
+        Err(e) => Err(e),
     }
-    child.wait()?;
-    Ok(())
 }
 
 // ─── Construção da URL com payload injetado ───────────────────────────────────
@@ -806,6 +861,144 @@ fn fetch_with_client(client: &Client, url: &str) -> Option<(u16, String)> {
         let body   = r.text().unwrap_or_default();
         (status, body)
     })
+}
+
+// ─── Integração Unsloth / llama-server ────────────────────────────────────────
+fn preflight_unsloth(modelo: &str, host: &str, verbose: bool) -> bool {
+    let client = match Client::builder().timeout(Duration::from_secs(5)).build() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let endpoint = format!("{}/v1/models", host.trim_end_matches('/'));
+    match client.get(&endpoint).send() {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<Value>() {
+                Ok(json) => {
+                    let modelos: Vec<String> = json
+                        .get("data")
+                        .and_then(|d| d.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    if modelos.contains(&modelo.to_string()) {
+                        if verbose {
+                            println!("{}[LLM] Modelo '{}' disponível em {}{}", GREEN, modelo, host, RESET);
+                        }
+                        true
+                    } else {
+                        eprintln!("{}[!] Modelo '{}' não encontrado no llama-server. Modelos disponíveis: {:?}{}", YELLOW, modelo, modelos, RESET);
+                        false
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}[!] Não foi possível parsear /v1/models: {}{}", YELLOW, e, RESET);
+                    false
+                }
+            }
+        }
+        Ok(resp) => {
+            eprintln!("{}[!] llama-server respondeu {} em /v1/models{}", YELLOW, resp.status(), RESET);
+            false
+        }
+        Err(e) => {
+            eprintln!("{}[!] Não foi possível contatar llama-server em {}: {}{}", YELLOW, host, e, RESET);
+            false
+        }
+    }
+}
+
+fn baixar_arquivo(url: &str, destino: &Path) -> std::io::Result<()> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(600))
+        .build()
+        .map_err(|e| std::io::Error::new(ErrorKind::Other, e.to_string()))?;
+
+    if let Some(dir) = destino.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+
+    let mut resp = client
+        .get(url)
+        .send()
+        .map_err(|e| std::io::Error::new(ErrorKind::Other, e.to_string()))?;
+
+    if !resp.status().is_success() {
+        return Err(std::io::Error::new(
+            ErrorKind::Other,
+            format!("HTTP {} ao baixar {}", resp.status(), url),
+        ));
+    }
+
+    let mut file = File::create(destino)?;
+    std::io::copy(&mut resp, &mut file)?;
+    Ok(())
+}
+
+fn bootstrap_unsloth(modelo: &str, host: &mut String, verbose: bool) -> std::io::Result<()> {
+    if !host.contains("127.0.0.1") && !host.contains("localhost") {
+        return Err(std::io::Error::new(
+            ErrorKind::Other,
+            "bootstrap automático só é suportado para host local (127.0.0.1)",
+        ));
+    }
+
+    println!("{}[*] Iniciando bootstrap do llama-server + modelo recomendado...{}", CYAN, RESET);
+    let base_dir = Path::new(UNSLOTH_DIR_LOCAL);
+    std::fs::create_dir_all(base_dir)?;
+
+    // 1) Binário llama-server
+    let bin_path = if cfg!(windows) {
+        base_dir.join("llama-server.exe")
+    } else {
+        base_dir.join("llama-server")
+    };
+
+    if !bin_path.exists() {
+        if cfg!(windows) {
+            println!("{}[*] Baixando llama-server (Windows)...{}", CYAN, RESET);
+            baixar_arquivo(LLAMA_SERVER_URL_WIN, &bin_path)?;
+        } else {
+            return Err(std::io::Error::new(
+                ErrorKind::Other,
+                "bootstrap automático ainda não implementado para este SO; instale manually o llama.cpp server",
+            ));
+        }
+    } else if verbose {
+        println!("{}[V] Binário llama-server já presente em {}{}", MAGENTA, bin_path.display(), RESET);
+    }
+
+    // 2) Modelo recomendado
+    let modelo_path = base_dir.join(UNSLOTH_MODEL_ARQUIVO_RECOMENDADO);
+    if !modelo_path.exists() {
+        println!("{}[*] Baixando modelo recomendado (pode demorar, ~4GB)...{}", CYAN, RESET);
+        baixar_arquivo(UNSLOTH_MODEL_URL_RECOMENDADO, &modelo_path)?;
+    } else if verbose {
+        println!("{}[V] Modelo já encontrado em {}{}", MAGENTA, modelo_path.display(), RESET);
+    }
+
+    // 3) Sobe o servidor em background com alias = modelo solicitado.
+    println!("{}[*] Subindo llama-server local em {} usando alias '{}'...{}", CYAN, UNSLOTH_HOST_DEFAULT, modelo, RESET);
+    let mut cmd = Command::new(&bin_path);
+    cmd.arg("--model").arg(&modelo_path)
+        .arg("--alias").arg(modelo)
+        .arg("--port").arg("8001")
+        .arg("--host").arg("127.0.0.1")
+        .arg("--ctx-size").arg("4096")
+        .arg("--batch-size").arg("512")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let _child = cmd.spawn()?;
+    *host = UNSLOTH_HOST_DEFAULT.to_string();
+
+    // Aguarda alguns segundos para o servidor ficar pronto
+    thread::sleep(Duration::from_secs(3));
+    Ok(())
 }
 
 // ─── Structs ──────────────────────────────────────────────────────────────────
