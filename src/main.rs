@@ -126,11 +126,6 @@ const RCE_PAYLOADS: &[&str] = &[
     "' ;id; '","\" ;id; \"",
 ];
 
-const RCE_INDICADORES: &[&str] = &[
-    "uid=","gid=","groups=","root","www-data",
-    "PING 127.0.0.1","64 bytes from",
-];
-
 const PARAMS_SENSIVEIS: &[&str] = &[
     "id","user","userid","user_id","account","acct","admin","role",
     "token","auth","key","api_key","secret","password","pass","pwd",
@@ -424,8 +419,25 @@ fn reflexo_xss(corpo: &str) -> bool {
 
 fn parece_ssrf(corpo: &str) -> bool { let l = corpo.to_lowercase(); SSRF_INDICADORES.iter().any(|i| l.contains(i)) }
 fn parece_lfi(corpo: &str)  -> bool { let l = corpo.to_lowercase(); LFI_INDICADORES.iter().any(|i| l.contains(i)) }
-fn parece_rce(corpo: &str)  -> bool { let l = corpo.to_lowercase(); RCE_INDICADORES.iter().any(|i| l.contains(i)) }
-fn parece_ssti(corpo: &str) -> bool { corpo.contains("49") }
+fn parece_rce(corpo: &str)  -> bool {
+    let l = corpo.to_lowercase();
+    // Exige padrão específico: uid=N ou gid=N (não apenas a string solta)
+    if l.contains("uid=") && l.contains("gid=") { return true; }
+    if l.contains("groups=") && (l.contains("uid=") || l.contains("root")) { return true; }
+    if l.contains("ping 127.0.0.1") || l.contains("64 bytes from") { return true; }
+    false
+}
+
+fn parece_ssti(corpo: &str) -> bool {
+    // SSTI Jinja2/Twig: 7*7=49 deve aparecer como resultado avulso no body
+    // Evita falsos positivos em páginas que naturalmente contêm "49"
+    let l = corpo.to_lowercase();
+    // Precisa conter "49" isolado E algum marcador de template engine
+    (l.contains(">49<") || l.contains(">49 ") || l.contains(" 49<") || corpo.contains("\"49\""))
+        && (l.contains("jinja") || l.contains("twig") || l.contains("template")
+            || l.contains("render") || l.contains("nunjucks") || l.contains("handlebars"))
+        || false
+}
 
 // ─── Filtro principal ─────────────────────────────────────────────────────────
 
@@ -581,6 +593,14 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
         pb.set_message(format!("{}", achados.lock().unwrap().len()));
         if !url.contains('?') { return; }
 
+        // Ignora URLs cujo PATH já contém sintaxe de template engine
+        // (ex: Grafana com {{alert.url}} no path — não é SSTI/RCE real)
+        let url_path = url.split('?').next().unwrap_or("");
+        let path_tem_template = url_path.contains("%7B%7B") || url_path.contains("{{")
+            || url_path.contains("%7D%7D") || url_path.contains("}}");
+        // Para essas URLs ainda testamos SQLi e IDOR, mas não XSS/SSTI/RCE
+        let testar_template_injection = !path_tem_template;
+
         let params: Vec<(String, String)> = url.splitn(2,'?').nth(1).unwrap_or("")
             .split('&')
             .filter_map(|p| p.split_once('=').map(|(k,v)| (k.to_string(),v.to_string())))
@@ -604,6 +624,7 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
             }
 
             // XSS + SSTI
+            if testar_template_injection {
             for payload in XSS_PAYLOADS {
                 if let Some(tu) = construir_url_injetada(url, param, payload) {
                     *total_testes.lock().unwrap() += 1;
@@ -616,6 +637,7 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
                     }
                 }
             }
+            } // fim testar_template_injection
 
             // SSRF
             for payload in SSRF_PAYLOADS {
@@ -638,6 +660,7 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
             }
 
             // RCE
+            if testar_template_injection {
             for payload in RCE_PAYLOADS {
                 if let Some(tu) = construir_url_injetada(url, param, payload) {
                     *total_testes.lock().unwrap() += 1;
@@ -646,6 +669,7 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
                     }
                 }
             }
+            } // fim testar_template_injection
 
             // Open Redirect
             if REDIRECT_PARAMS.iter().any(|rp| param.to_lowercase().contains(rp)) {
@@ -727,6 +751,15 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
 fn registrar(achados: &Arc<Mutex<Vec<Achado>>>, pb: &Arc<ProgressBar>,
     tipo: &'static str, url: &str, param: &str, payload: &str,
     body: &str, status: u16, ms: u128) {
+    // Deduplicação: um achado único por (tipo, url_base, param)
+    let url_base = url.split('?').next().unwrap_or(url);
+    {
+        let lock = achados.lock().unwrap();
+        if lock.iter().any(|a| a.tipo == tipo && a.parametro == param
+            && a.url.split('?').next().unwrap_or(&a.url) == url_base) {
+            return; // já registrado
+        }
+    }
     let sev = Severidade::de_tipo(tipo);
     pb.println(format!("{}[{}]{} [{}] {} param:{} HTTP:{} {}ms",
         sev.cor(), sev.label(), RESET, tipo, url, param, status, ms));
