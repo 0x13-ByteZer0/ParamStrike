@@ -1,6 +1,6 @@
 ﻿use std::env;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Write, ErrorKind};
 use std::path::PathBuf;
 use std::process::{self, Command, Stdio};
 use std::collections::{HashMap, HashSet};
@@ -167,6 +167,7 @@ struct Config {
     waf_detect:         bool,
     apenas_sensiveis:   bool,
     gerar_payloads_llm: bool,
+    usar_dalfox:        bool,
 }
 
 impl Default for Config {
@@ -180,6 +181,7 @@ impl Default for Config {
             headers_extra: Vec::new(),
             rate_delay_ms: 0, threads: 0, timeout_secs: 10,
             waf_detect: false, apenas_sensiveis: false, gerar_payloads_llm: false,
+            usar_dalfox: false,
         }
     }
 }
@@ -210,6 +212,7 @@ struct Achado {
     url:           String,
     parametro:     String,
     payload:       String,
+    url_injetada:  Option<String>,
     corpo_preview: String,
     status_code:   u16,
     tempo_ms:      u128,
@@ -237,6 +240,7 @@ fn main() {
     cfg.waf_detect       = args.contains(&"--waf".to_string());
     cfg.apenas_sensiveis = args.contains(&"--only-sensitive".to_string());
     cfg.gerar_payloads_llm = args.contains(&"--llm-payloads".to_string());
+    cfg.usar_dalfox      = args.contains(&"--dalfox".to_string());
     cfg.explorar         = args.contains(&"-p".to_string())
         || args.contains(&"--explore".to_string()) || cfg.usar_unsloth;
 
@@ -616,7 +620,7 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
                 if let Some(tu) = construir_url_injetada(url, param, payload) {
                     *total_testes.lock().unwrap() += 1;
                     match fetch(&client, &tu, cfg) {
-                        Some((s,b,ms)) if parece_erro_sql(&b) => registrar(&achados,&pb,"SQLi",url,param,payload,&b,s,ms),
+                        Some((s,b,ms)) if parece_erro_sql(&b) => registrar(&achados,&pb,"SQLi",url,param,payload,&tu,&b,s,ms),
                         None => { falhas.lock().unwrap().push((url.clone(),param.clone(),payload.to_string(),"timeout".to_string())); }
                         _ => {}
                     }
@@ -630,9 +634,9 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
                     *total_testes.lock().unwrap() += 1;
                     if let Some((s,b,ms)) = fetch(&client, &tu, cfg) {
                         if (payload.contains("{{") || payload.contains("${")) && parece_ssti(&b) {
-                            registrar(&achados,&pb,"SSTI",url,param,payload,&b,s,ms);
+                            registrar(&achados,&pb,"SSTI",url,param,payload,&tu,&b,s,ms);
                         } else if reflexo_xss(&b) {
-                            registrar(&achados,&pb,"XSS",url,param,payload,&b,s,ms);
+                            registrar(&achados,&pb,"XSS",url,param,payload,&tu,&b,s,ms);
                         }
                     }
                 }
@@ -644,7 +648,7 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
                 if let Some(tu) = construir_url_injetada(url, param, payload) {
                     *total_testes.lock().unwrap() += 1;
                     if let Some((s,b,ms)) = fetch(&client, &tu, cfg) {
-                        if parece_ssrf(&b) { registrar(&achados,&pb,"SSRF",url,param,payload,&b,s,ms); }
+                        if parece_ssrf(&b) { registrar(&achados,&pb,"SSRF",url,param,payload,&tu,&b,s,ms); }
                     }
                 }
             }
@@ -654,7 +658,7 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
                 if let Some(tu) = construir_url_injetada(url, param, payload) {
                     *total_testes.lock().unwrap() += 1;
                     if let Some((s,b,ms)) = fetch(&client, &tu, cfg) {
-                        if parece_lfi(&b) { registrar(&achados,&pb,"LFI",url,param,payload,&b,s,ms); }
+                        if parece_lfi(&b) { registrar(&achados,&pb,"LFI",url,param,payload,&tu,&b,s,ms); }
                     }
                 }
             }
@@ -665,7 +669,7 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
                 if let Some(tu) = construir_url_injetada(url, param, payload) {
                     *total_testes.lock().unwrap() += 1;
                     if let Some((s,b,ms)) = fetch(&client, &tu, cfg) {
-                        if parece_rce(&b) { registrar(&achados,&pb,"RCE",url,param,payload,&b,s,ms); }
+                        if parece_rce(&b) { registrar(&achados,&pb,"RCE",url,param,payload,&tu,&b,s,ms); }
                     }
                 }
             }
@@ -677,13 +681,13 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
                     if let Some(tu) = construir_url_injetada(url, param, payload) {
                         *total_testes.lock().unwrap() += 1;
                         if let Ok(resp) = client.get(&tu).send() {
-                            let uf = resp.url().to_string();
-                            let st = resp.status().as_u16();
-                            let bd = resp.text().unwrap_or_default();
-                            if uf.contains("evil.com") { registrar(&achados,&pb,"OpenRedirect",url,param,payload,&bd,st,0); }
-                        }
-                    }
-                }
+                             let uf = resp.url().to_string();
+                             let st = resp.status().as_u16();
+                             let bd = resp.text().unwrap_or_default();
+                             if uf.contains("evil.com") { registrar(&achados,&pb,"OpenRedirect",url,param,payload,&tu,&bd,st,0); }
+                         }
+                     }
+                 }
             }
 
             // IDOR
@@ -695,10 +699,10 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
                             *total_testes.lock().unwrap() += 1;
                             if let Some((s,b,ms)) = fetch(&client, &tu, cfg) {
                                 let diff = (b.len() as isize - corpo_base.len() as isize).unsigned_abs();
-                                if s == *status_base && diff > IDOR_DIFF_MINIMA {
-                                    let p = format!("{} → {}", valor, novo);
-                                    registrar(&achados,&pb,"IDOR",url,param,&p,&b,s,ms);
-                                }
+                                     if s == *status_base && diff > IDOR_DIFF_MINIMA {
+                                         let p = format!("{} → {}", valor, novo);
+                                         registrar(&achados,&pb,"IDOR",url,param,&p,&tu,&b,s,ms);
+                                     }
                             }
                         }
                     }
@@ -723,9 +727,12 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
     if !achados_final.is_empty() {
         println!("\n{}Achados:{}", BOLD, RESET);
         for a in &achados_final {
-            println!("  {}[{}]{} [{}] {} | param:{} | HTTP {} | {}ms",
+            println!("  {}[{}]{} [{}] {} | param:{} | HTTP {} | {}ms", 
                 a.severidade.cor(), a.severidade.label(), RESET,
                 a.tipo, a.url, a.parametro, a.status_code, a.tempo_ms);
+            if let Some(ref inj) = a.url_injetada {
+                println!("      -> {}{}{}", CYAN, inj, RESET);
+            }
         }
     } else {
         println!("{}[-] Sem comportamentos suspeitos.{}", BLUE, RESET);
@@ -739,6 +746,9 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
     } else if cfg.usar_unsloth {
         println!("{}[LLM] Nenhum achado para validar.{}", BLUE, RESET);
     }
+    if cfg.usar_dalfox {
+        validar_com_dalfox(&achados_final, cfg.verbose)?;
+    }
 
     if let Some(ref prefix) = cfg.report_prefix {
         salvar_relatorios(prefix, &achados_final, &falhas_final)?;
@@ -749,7 +759,7 @@ fn explorar_vulnerabilidades(urls: &[String], cfg: &Config) -> std::io::Result<(
 }
 
 fn registrar(achados: &Arc<Mutex<Vec<Achado>>>, pb: &Arc<ProgressBar>,
-    tipo: &'static str, url: &str, param: &str, payload: &str,
+    tipo: &'static str, url: &str, param: &str, payload: &str, url_injetada: &str,
     body: &str, status: u16, ms: u128) {
     // Deduplicação: um achado único por (tipo, url_base, param)
     let url_base = url.split('?').next().unwrap_or(url);
@@ -761,10 +771,12 @@ fn registrar(achados: &Arc<Mutex<Vec<Achado>>>, pb: &Arc<ProgressBar>,
         }
     }
     let sev = Severidade::de_tipo(tipo);
-    pb.println(format!("{}[{}]{} [{}] {} param:{} HTTP:{} {}ms",
-        sev.cor(), sev.label(), RESET, tipo, url, param, status, ms));
+    pb.println(format!("{}[{}]{} [{}] {} param:{} HTTP:{} {}ms\n      -> {}{}{}",
+        sev.cor(), sev.label(), RESET, tipo, url, param, status, ms,
+        CYAN, url_injetada, RESET));
     achados.lock().unwrap().push(Achado {
         tipo, url: url.to_string(), parametro: param.to_string(), payload: payload.to_string(),
+        url_injetada: Some(url_injetada.to_string()),
         corpo_preview: body.chars().take(MAX_CHARS_PREVIEW_CORPO).collect(),
         status_code: status, tempo_ms: ms, llm: None, severidade: sev,
     });
@@ -866,16 +878,56 @@ CLASSIFICAÇÃO: true_positive | false_positive\nSEVERIDADE_REAL: critica|alta|m
     Ok(())
 }
 
+// ─── Dalfox ────────────────────────────────────────────────────────────────────
+fn validar_com_dalfox(achados: &[Achado], verbose: bool) -> std::io::Result<()> {
+    let mut urls: Vec<String> = achados.iter()
+        .filter(|a| a.tipo == "XSS")
+        .filter_map(|a| a.url_injetada.clone())
+        .collect();
+    let mut seen = HashSet::new();
+    urls.retain(|u| seen.insert(u.clone()));
+    if urls.is_empty() {
+        println!("{}[dalfox] Nenhum XSS para validar.{}", BLUE, RESET);
+        return Ok(());
+    }
+    println!("{}[dalfox] Validando {} URLs (headless){}", CYAN, urls.len(), RESET);
+    let mut child = match Command::new("dalfox")
+        .args(["pipe","--silence","--no-spinner","--follow-redirects","--waf-evasion","--mass"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn() {
+            Ok(c) => c,
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                eprintln!("{}[dalfox] Binário não encontrado no PATH; pulei a validação.{}", YELLOW, RESET);
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        for u in &urls {
+            writeln!(stdin, "{}", u)?;
+        }
+    }
+    let status = child.wait()?;
+    if verbose {
+        println!("{}[dalfox] exit code: {}{}", CYAN, status, RESET);
+    }
+    Ok(())
+}
+
 // ─── Relatórios ───────────────────────────────────────────────────────────────
 
 fn salvar_relatorios(prefix: &str, achados: &[Achado], falhas: &[(String,String,String,String)]) -> std::io::Result<()> {
     let pa = format!("{}_achados.csv", prefix);
     let mut f = File::create(&pa)?;
-    writeln!(f, "severidade,tipo,url,parametro,payload,status,tempo_ms,llm")?;
+    writeln!(f, "severidade,tipo,url,parametro,payload,url_injetada,status,tempo_ms,llm")?;
     for a in achados {
-        writeln!(f, "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",{},{},\"{}\"",
+        writeln!(f, "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",{}, {},\"{}\"",
             a.severidade.label(), a.tipo,
             escape_csv(&a.url), escape_csv(&a.parametro), escape_csv(&a.payload),
+            escape_csv(a.url_injetada.as_deref().unwrap_or("")),
             a.status_code, a.tempo_ms, escape_csv(a.llm.as_deref().unwrap_or("")))?;
     }
     let pf = format!("{}_falhas.csv", prefix);
@@ -903,14 +955,15 @@ tr:hover td{{background:#161b22}}
 .CRITICA{{color:#ff6b6b}}.ALTA{{color:#ffa94d}}.MEDIA{{color:#da77f2}}.BAIXA{{color:#74c0fc}}
 </style></head><body>
 <h1>&#x1F3AF; ParamStrike Vulnerability Report</h1>
-<p style="color:#8b949e">Total de achados: {}</p>
+<p style=\"color:#8b949e\">Total de achados: {}</p>
 <h2>Achados</h2>
-<table><tr><th>Sev</th><th>Tipo</th><th>URL</th><th>Parâmetro</th><th>Payload</th><th>HTTP</th><th>ms</th><th>LLM</th></tr>"#,
+<table><tr><th>Sev</th><th>Tipo</th><th>URL</th><th>Parâmetro</th><th>Payload</th><th>URL injetada</th><th>HTTP</th><th>ms</th><th>LLM</th></tr>"#,
     achados.len())?;
     for a in achados {
-        writeln!(f, "<tr><td class=\"{}\"><b>{}</b></td><td>{}</td><td>{}</td><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td></tr>",
+        writeln!(f, "<tr><td class=\"{}\"><b>{}</b></td><td>{}</td><td>{}</td><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
             a.severidade.label(), a.severidade.label(), a.tipo,
             html_esc(&a.url), html_esc(&a.parametro), html_esc(&a.payload),
+            html_esc(a.url_injetada.as_deref().unwrap_or("-")),
             a.status_code, a.tempo_ms, html_esc(a.llm.as_deref().unwrap_or("-")))?;
     }
     writeln!(f, "</table></body></html>")?;
@@ -1091,6 +1144,7 @@ fn mostrar_help() {
 
     println!("\n{}── Exploração ───────────────────────────────────────────────────{}", DIM, RESET);
     println!("  {}  -p, --explore{}          SQLi XSS SSRF LFI RCE IDOR OpenRedirect SSTI", MAGENTA, RESET);
+    println!("  {}  --dalfox{}               Revalidar XSS com dalfox (pipe)", MAGENTA, RESET);
 
     println!("\n{}── IA (Unsloth/llama-server) ────────────────────────────────────{}", DIM, RESET);
     println!("  {}  --unsloth{}              Validar achados com LLM", MAGENTA, RESET);
