@@ -891,28 +891,42 @@ fn validar_com_dalfox(achados: &[Achado], verbose: bool) -> std::io::Result<()> 
         return Ok(());
     }
     println!("{}[dalfox] Validando {} URLs (headless){}", CYAN, urls.len(), RESET);
-    let mut child = match Command::new("dalfox")
-        .args(["pipe","--silence","--no-spinner","--follow-redirects","--waf-evasion","--mass"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn() {
-            Ok(c) => c,
-            Err(e) if e.kind() == ErrorKind::NotFound => {
-                eprintln!("{}[dalfox] Binário não encontrado no PATH; pulei a validação.{}", YELLOW, RESET);
-                return Ok(());
-            }
-            Err(e) => return Err(e),
-        };
+    // Tenta de forma batelada via pipe com worker 1 (mais estável com chromedp)
+    let pipe_status = {
+        let mut child = match Command::new("dalfox")
+            .args(["pipe","--silence","--no-spinner","--follow-redirects","--waf-evasion","--mass","--worker","1"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn() {
+                Ok(c) => c,
+                Err(e) if e.kind() == ErrorKind::NotFound => {
+                    eprintln!("{}[dalfox] Binário não encontrado no PATH; pulei a validação.{}", YELLOW, RESET);
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            };
 
-    if let Some(mut stdin) = child.stdin.take() {
-        for u in &urls {
-            writeln!(stdin, "{}", u)?;
+        if let Some(mut stdin) = child.stdin.take() {
+            for u in &urls { writeln!(stdin, "{}", u)?; }
         }
-    }
-    let status = child.wait()?;
-    if verbose {
-        println!("{}[dalfox] exit code: {}{}", CYAN, status, RESET);
+        child.wait()
+    };
+
+    if matches!(pipe_status, Ok(status) if status.success()) {
+        if verbose { println!("{}[dalfox] pipe concluído com sucesso{}", CYAN, RESET); }
+    } else {
+        eprintln!("{}[dalfox] Execução em lote falhou; tentando modo serial seguro (--worker 1)...{}", YELLOW, RESET);
+        for u in &urls {
+            let status = Command::new("dalfox")
+                .args(["url", u, "--silence","--no-spinner","--follow-redirects","--waf-evasion","--worker","1"])
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status();
+            if verbose {
+                if let Ok(st) = status { println!("{}[dalfox] {} -> {}", CYAN, u, st); }
+            }
+        }
     }
     Ok(())
 }
