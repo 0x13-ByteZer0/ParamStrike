@@ -19,10 +19,11 @@ ParamStrike lê listas de URLs, remove ruído (extensões estáticas), verifica 
 - 🔍 Modos: arquivo (`-l`), domínio único (`-d` com subfinder/katana/urlfinder) e batch (`-f`).
 - 🧹 Filtro de extensões irrelevantes (imagens, mídia, fontes, binários, map etc).
 - ✅ Status HTTP categorizado (2xx/3xx/4xx/5xx/sem resposta).
-- 🧪 Exploração ativa: SQLi, XSS refletido, IDOR com deltas.
-- 🤖 Validação de achados via Unsloth/llama-server (`--unsloth`).
+- 🧪 Exploração ativa: SQLi, XSS refletido, IDOR, SSRF, LFI, RCE, OpenRedirect, SSTI.
+- 🤖 Validação de achados via Unsloth/llama-server (`--unsloth`) e geração de payloads.
 - 🛠️ Bootstrap automático do modelo/servidor (`--unsloth-bootstrap`) com suporte a token HuggingFace (`--hf-token` ou `HF_TOKEN`).
-- 🗂️ Relatórios CSV de achados/falhas (`--report-prefix`).
+- 🔦 Fuzzing adicional com Nuclei (`--nuclei`, templates custom, rate limit configurável).
+- 🗂️ Relatórios CSV/HTML de achados/falhas (`--report-prefix`).
 - 🌈 Saída colorida e barra de progresso (indicatif).
 - 🔁 Auto-update opcional (`-up`).
 
@@ -64,6 +65,10 @@ Principais flags:
 | `-v/--verbose` | Verbose |
 | `-status` | Checa status HTTP e separa por código |
 | `-p/--explore` | Testes SQLi/XSS/IDOR |
+| `--nuclei` | Rodar nuclei nas URLs filtradas |
+| `--nuclei-templates <p>` | Templates nuclei (padrão: $NUCLEI_TEMPLATES ou ~/nuclei-templates) |
+| `--nuclei-rate <n>` | Rate limit nuclei (padrão: 50) |
+| `--nuclei-output <arq>` | Saída nuclei (padrão: `<saida>_nuclei.txt`) |
 | `--unsloth` | Valida achados com LLM (OpenAI-compatible) |
 | `--unsloth-model <m>` | Alias/modelo no llama-server (padrão `unsloth/Qwen3.5-8B-Instruct-GGUF`) |
 | `--unsloth-host <url>` | Host do servidor (padrão `http://127.0.0.1:8001`) |
@@ -88,6 +93,10 @@ paramstrike -l urls.txt -status -v
 Explorar (SQLi/XSS/IDOR) e validar com LLM bootstrap:
 ```bash
 paramstrike -l urls.txt -p --unsloth --unsloth-bootstrap --report-prefix rel
+```
+Fuzzing adicional com Nuclei:
+```bash
+paramstrike -l urls.txt -p --nuclei --nuclei-rate 100
 ```
 Domínio único completo:
 ```bash

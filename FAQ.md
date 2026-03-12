@@ -3,6 +3,9 @@
 ### O que preciso para validar com LLM?
 Um servidor OpenAI-compatible (llama-server/llama_cpp.server). Use `--unsloth` para habilitar e `--unsloth-bootstrap` para subir tudo localmente.
 
+### Posso rodar nuclei junto?
+Sim. Use `--nuclei` (+ `--nuclei-templates`, `--nuclei-rate`, `--nuclei-output`). Se o binário não estiver no PATH, a etapa é pulada com aviso.
+
 ### Recebi 401 ao baixar o modelo no bootstrap.
 Alguns modelos do HuggingFace exigem token. Defina `HF_TOKEN=<token>` ou use `--hf-token <token>` junto com `--unsloth-bootstrap`.
 

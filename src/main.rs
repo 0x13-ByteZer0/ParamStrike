@@ -168,6 +168,10 @@ struct Config {
     apenas_sensiveis:   bool,
     gerar_payloads_llm: bool,
     usar_dalfox:        bool,
+    usar_nuclei:        bool,
+    nuclei_templates:   Option<String>,
+    nuclei_rate:        u32,
+    nuclei_output:      Option<String>,
 }
 
 impl Default for Config {
@@ -182,6 +186,10 @@ impl Default for Config {
             rate_delay_ms: 0, threads: 0, timeout_secs: 10,
             waf_detect: false, apenas_sensiveis: false, gerar_payloads_llm: false,
             usar_dalfox: false,
+            usar_nuclei: false,
+            nuclei_templates: None,
+            nuclei_rate: 50,
+            nuclei_output: None,
         }
     }
 }
@@ -241,6 +249,7 @@ fn main() {
     cfg.apenas_sensiveis = args.contains(&"--only-sensitive".to_string());
     cfg.gerar_payloads_llm = args.contains(&"--llm-payloads".to_string());
     cfg.usar_dalfox      = args.contains(&"--dalfox".to_string());
+    cfg.usar_nuclei      = args.contains(&"--nuclei".to_string());
     cfg.explorar         = args.contains(&"-p".to_string())
         || args.contains(&"--explore".to_string()) || cfg.usar_unsloth;
 
@@ -251,6 +260,9 @@ fn main() {
     if let Some(v) = arg_val(&args,"--delay").and_then(|v| v.parse().ok())   { cfg.rate_delay_ms = v; }
     if let Some(v) = arg_val(&args,"--threads").and_then(|v| v.parse().ok()) { cfg.threads       = v; }
     if let Some(v) = arg_val(&args,"--timeout").and_then(|v| v.parse().ok()) { cfg.timeout_secs  = v; }
+    if let Some(v) = arg_val(&args,"--nuclei-rate").and_then(|v| v.parse().ok()) { cfg.nuclei_rate = v; }
+    if let Some(v) = arg_val(&args,"--nuclei-templates") { cfg.nuclei_templates = Some(v); }
+    if let Some(v) = arg_val(&args,"--nuclei-output") { cfg.nuclei_output = Some(v); }
 
     for i in 0..args.len().saturating_sub(1) {
         if args[i] == "--header" {
@@ -564,6 +576,10 @@ fn filtrar_urls(
 
     if cfg.explorar {
         explorar_vulnerabilidades(&urls_filtradas, cfg)?;
+    }
+
+    if cfg.usar_nuclei {
+        executar_nuclei(&urls_filtradas, arquivo_saida, cfg)?;
     }
 
     println!();
@@ -931,6 +947,59 @@ fn validar_com_dalfox(achados: &[Achado], verbose: bool) -> std::io::Result<()> 
     Ok(())
 }
 
+// ─── Nuclei ────────────────────────────────────────────────────────────────────
+fn executar_nuclei(urls: &[String], arquivo_saida: &str, cfg: &Config) -> std::io::Result<()> {
+    if urls.is_empty() {
+        println!("{}[nuclei] Nenhuma URL para testar.{}", BLUE, RESET);
+        return Ok(());
+    }
+
+    let tmp_path = env::temp_dir().join("paramstrike_nuclei_urls.txt");
+    {
+        let mut f = File::create(&tmp_path)?;
+        for u in urls {
+            writeln!(f, "{}", u)?;
+        }
+    }
+
+    let templates = cfg.nuclei_templates.clone()
+        .or_else(|| env::var("NUCLEI_TEMPLATES").ok())
+        .or_else(|| env::var("HOME").ok().map(|h| format!("{}/nuclei-templates", h)))
+        .unwrap_or_else(|| "./nuclei-templates".to_string());
+
+    let out = cfg.nuclei_output.clone()
+        .unwrap_or_else(|| format!("{}_nuclei.txt", arquivo_saida.strip_suffix(".txt").unwrap_or(arquivo_saida)));
+
+    println!("{}[nuclei] Rodando nuclei em {} URLs (templates: {}, rl: {}) → {}{}", CYAN, urls.len(), templates, cfg.nuclei_rate, out, RESET);
+
+    let status = Command::new("nuclei")
+        .args(["-silent","-nc"])
+        .args(["-l", tmp_path.to_string_lossy().as_ref()])
+        .args(["-t", &templates])
+        .args(["-rl", &cfg.nuclei_rate.to_string()])
+        .arg("-o").arg(&out)
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            println!("{}[✔] nuclei concluído: {}{}", GREEN, out, RESET);
+        }
+        Ok(s) => {
+            eprintln!("{}[!] nuclei retornou código {}{}", YELLOW, s, RESET);
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            eprintln!("{}[!] nuclei não encontrado no PATH; pulei esta etapa.{}", YELLOW, RESET);
+        }
+        Err(e) => {
+            eprintln!("{}[!] Erro ao executar nuclei: {}{}", YELLOW, e, RESET);
+        }
+    }
+
+    // Não removemos o arquivo de saída; limpamos apenas o tmp
+    let _ = std::fs::remove_file(tmp_path);
+    Ok(())
+}
+
 // ─── Relatórios ───────────────────────────────────────────────────────────────
 
 fn salvar_relatorios(prefix: &str, achados: &[Achado], falhas: &[(String,String,String,String)]) -> std::io::Result<()> {
@@ -1159,6 +1228,10 @@ fn mostrar_help() {
     println!("\n{}── Exploração ───────────────────────────────────────────────────{}", DIM, RESET);
     println!("  {}  -p, --explore{}          SQLi XSS SSRF LFI RCE IDOR OpenRedirect SSTI", MAGENTA, RESET);
     println!("  {}  --dalfox{}               Revalidar XSS com dalfox (pipe)", MAGENTA, RESET);
+    println!("  {}  --nuclei{}               Rodar nuclei nas URLs filtradas", MAGENTA, RESET);
+    println!("  {}  --nuclei-templates <p>{} Templates (padrão: $NUCLEI_TEMPLATES ou ~/nuclei-templates)", MAGENTA, RESET);
+    println!("  {}  --nuclei-rate <n>{}      Rate limit nuclei (padrão: 50)", MAGENTA, RESET);
+    println!("  {}  --nuclei-output <arq>{}  Saída nuclei (padrão: <saida>_nuclei.txt)", MAGENTA, RESET);
 
     println!("\n{}── IA (Unsloth/llama-server) ────────────────────────────────────{}", DIM, RESET);
     println!("  {}  --unsloth{}              Validar achados com LLM", MAGENTA, RESET);

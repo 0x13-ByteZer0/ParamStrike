@@ -33,6 +33,9 @@ Monólito em `src/main.rs` (~1.3k linhas) orientado a pipeline:
   - Chamada OpenAI-compatible `/v1/chat/completions`.
   - Prompt em PT-BR; extrai classificação e payloads extras.
   - Relatórios CSV com achados e falhas.
+- **Fuzzing adicional** (`executar_nuclei`):
+  - Roda `nuclei` sobre as URLs filtradas com templates configuráveis e rate-limit.
+  - Saída default `<arquivo_saida>_nuclei.txt`; tolera ausência do binário.
 - **Bootstrap LLM** (`bootstrap_unsloth`):
   - Baixa modelo recomendado (Qwen3.5-8B Instruct Q4_K_M).
   - Windows: `llama-server.exe`; Linux/macOS: `python -m llama_cpp.server`.

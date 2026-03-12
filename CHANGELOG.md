@@ -9,6 +9,7 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) e ve
 - 🔑 Suporte a token HuggingFace (`--hf-token` ou env `HF_TOKEN`) para baixar modelos privados.
 - 🗂️ Relatórios CSV de achados/falhas com `--report-prefix`.
 - 🧭 Flags pinchtab (`--pinchtab-start`, `--pinchtab-scope`, `--pinchtab-scope-file`, `--pinchtab-host`) para coletar URLs com parâmetros.
+- 🔦 Fuzzing de URLs filtradas com Nuclei (`--nuclei`, templates e rate configuráveis).
 
 ### Changed
 - 🛡️ Validação de achados agora padrão via Unsloth; Ollama foi removido da CLI.

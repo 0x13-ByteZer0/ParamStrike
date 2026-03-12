@@ -4,7 +4,7 @@
 - Rust 1.70+ (instale com rustup)
 - Git
 - (Opcional para LLM) Python 3 + pip ou Windows para usar bootstrap do llama-server
-- Ferramentas externas opcionais: subfinder, katana, urlfinder, anew, pinchtab service
+- Ferramentas externas opcionais: subfinder, katana, urlfinder, anew, pinchtab service, dalfox, nuclei
 
 ## Setup
 ```bash
@@ -21,6 +21,11 @@ Binário: `target/release/paramstrike`.
 - Formatação: `cargo fmt`
 - Lints: `cargo clippy`
 - Auditoria: `cargo install cargo-audit && cargo audit`
+
+## Fuzzing Nuclei
+- Flags: `--nuclei`, `--nuclei-templates`, `--nuclei-rate`, `--nuclei-output`.
+- Templates: usa `$NUCLEI_TEMPLATES`, `~/nuclei-templates` ou `./nuclei-templates`.
+- Se nuclei não estiver no PATH, a etapa é ignorada com aviso.
 
 ## LLM / Unsloth
 - Servidor esperado: OpenAI-compatible (`/v1/chat/completions`).
