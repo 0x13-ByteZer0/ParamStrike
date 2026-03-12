@@ -973,10 +973,10 @@ fn executar_nuclei(urls: &[String], arquivo_saida: &str, cfg: &Config) -> std::i
     println!("{}[nuclei] Rodando nuclei em {} URLs (templates: {}, rl: {}) → {}{}", CYAN, urls.len(), templates, cfg.nuclei_rate, out, RESET);
 
     let status = Command::new("nuclei")
-        .args(["-silent","-nc"])
         .args(["-l", tmp_path.to_string_lossy().as_ref()])
         .args(["-t", &templates])
         .args(["-rl", &cfg.nuclei_rate.to_string()])
+        .args(["-severity", "critical,high,medium,low"])
         .arg("-o").arg(&out)
         .status();
 
