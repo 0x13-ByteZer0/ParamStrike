@@ -1,292 +1,69 @@
 # Arquitetura do ParamStrike
 
-## Visão Geral
+## Visão geral
+Monólito em `src/main.rs` (~1.3k linhas) orientado a pipeline:
+1) Parse de argumentos e configuração (verbose, status, explore, unsloth, pinchtab).
+2) Coleta de URLs (arquivo, subfinder/katana/urlfinder, pinchtab opcional).
+3) Filtragem: remove extensões estáticas e exige query string.
+4) (Opcional) Verificação de status HTTP em paralelo.
+5) (Opcional) Exploração ativa SQLi/XSS/IDOR em paralelo.
+6) (Opcional) Validação via Unsloth/llama-server e exportação CSV.
 
-ParamStrike é uma ferramenta CLI baseada em Rust para extração e análise de parâmetros de URL. A arquitetura é simples, direta e focada em performance.
+## Componentes principais
+- **CLI & Config**: parsing manual de flags; constantes para cores, modelos e limites.
+- **Coleta**:
+  - Arquivo ou stdin via `-l`.
+  - Domínio único `-d`: subfinder → katana → urlfinder.
+  - Batch `-f`: katana + urlfinder.
+  - Pinchtab (`coletar_urls_pinchtab`) via API HTTP, com dedup e limite de seeds.
+- **Filtragem** (`filtrar_urls`):
+  - BufReader para contagem/iteração.
+  - `EXTENSOES_REMOVER` para ignorar ruído.
+  - Barra de progresso (indicatif).
+  - Dedup final com HashSet.
+  - Saída via `anew` ou fallback em Rust.
+- **Status HTTP** (`verificar_status_http`):
+  - reqwest blocking com timeout; paralelismo com Rayon; arquivos por código HTTP.
+- **Exploração ativa** (`explorar_vulnerabilidades`):
+  - SQLi/XSS payloads fixos; IDOR com deltas.
+  - Percent-encoding completo na injeção.
+  - Baseline de resposta para diffs de tamanho (IDOR).
+  - Resultados guardados em `Achado`.
+- **Validação LLM** (`validar_com_unsloth`):
+  - Chamada OpenAI-compatible `/v1/chat/completions`.
+  - Prompt em PT-BR; extrai classificação e payloads extras.
+  - Relatórios CSV com achados e falhas.
+- **Bootstrap LLM** (`bootstrap_unsloth`):
+  - Baixa modelo recomendado (Qwen3.5-8B Instruct Q4_K_M).
+  - Windows: `llama-server.exe`; Linux/macOS: `python -m llama_cpp.server`.
+  - Suporte a token HuggingFace (`--hf-token` / `HF_TOKEN`).
 
-```
-┌────────────────────────────────────────────────────┐
-│        Verificação de Versão (AUTOMÁTICA)         │
-│  (Compara VERSION vs .version local)              │
-├────────────────────────────────────────────────────┤
-│           Usuario (CLI)                            │
-├────────┬────────┬──────────┬────────┬──────────────┤
-│ -h     │ -up    │   -l     │   -d   │ -f           │
-│(help)  │(update)│(filtro)  │(single)│(batch)       │
-├────────┴────────┼──────────┴────────┴──────────────┤
-│                 │                                   │
-│         Núcleo de Processamento                    │
-│  ├─ Leitura de arquivos (BufReader)               │
-│  ├─ Parsing de URLs                                │
-│  ├─ Filtro de extensões (30+)                     │
-│  ├─ Detecção de parâmetros                        │
-│  ├─ Verificação de status HTTP (curl)             │
-│  └─ Normalização                                   │
-├──────────────────────────────────────────────────────┤
-│      Categorização (se -status)                     │
-│  ├─ 2xx_sucessos.txt                              │
-│  ├─ 3xx_redirecionamentos.txt                   │
-│  ├─ 4xx_erros_cliente.txt                         │
-│  ├─ 5xx_erros_servidor.txt                        │
-│  └─ _sem_resposta.txt                             │
-├──────────────────────────────────────────────────────┤
-│        Camada de Saída (BufWriter)                  │
-│  ├─ Deduplicação com anew                         │
-│  ├─ Formatação de output                          │
-│  ├─ Feedback colorido (ANSI)                      │
-│  └─ Atualização de versão (se -up)                │
-├──────────────────────────────────────────────────────┤
-│           Arquivos de Saída                         │
-│  ├─ resultado.txt (ou -o customizado)             │
-│  ├─ VERSION (versionamento)                       │
-│  └─ .version (local cache)                        │
-└──────────────────────────────────────────────────────┘
-```
+## Fluxos
+### Modo padrão (-l)
+arquivo → filtragem → (status?) → (explore?) → (unsloth?) → saída/CSV
 
-## Componentes Principais
+### Modo domínio (-d)
+subfinder → katana/urlfinder → filtragem → demais passos iguais ao padrão
 
-### 0. Sistema de Versionamento (Novo em v1.1.0)
+### Bootstrap Unsloth
+preflight /v1/models → se falhar e `--unsloth-bootstrap`:
+  - baixa modelo (autenticado se token)
+  - inicia servidor local
+  - re-test /v1/models
 
-```rust
-verificar_atualizacoes()          // Compara versões
-├─ ler_versao_salva()            // Lê .version local
-├─ incrementar_versao()          // 1.0.0 → 1.1.0
-└─ salvar_versao()               // Escreve .version
+## Dependências-chave
+- reqwest (blocking, rustls), rayon, percent-encoding, indicatif, serde_json.
+- Ferramentas externas opcionais: subfinder, katana, urlfinder, pinchtab service, anew.
+- LLM opcional: llama-server/llama_cpp.server com modelo GGUF.
 
-atualizar_ferramenta()           // Flag -up
-├─ git pull
-├─ cargo build --release
-└─ incrementar_versao()
-```
+## Decisões de design
+- **Simples primeiro**: monólito único facilita distribuição.
+- **Paralelismo controlado**: uso de Rayon para CPU/I/O bound.
+- **Fallbacks resilientes**: dedup sem `anew`, bootstrap LLM multiplataforma, avisos sem abortar pipeline.
+- **Rustls**: evitar OpenSSL em ambientes mínimos.
 
-### 1. main()
-Função principal que:
-- **Sempre** verifica versão (ANTES de qualquer operação)
-- Processa argumentos da CLI
-- Determina qual modo executar
-- Valida entradas
-- Rota para a função apropriada
-
-### 2. Processamento de Argumentos
-```rust
-// Detecta flags e seus valores
--l <arquivo>      // Entrada padrão
--o <arquivo>      // Saída customizada
--d <dominio>      // Domínio único
--f <arquivo>      // Batch
--v, --verbose     // Modo verbose
--status           // Verifica HTTP
--up, --update     // Update automático
--h, --help        // Ajuda
-```
-
-### 3. Módulos de Processamento
-
-#### `verificar_atualizacoes()`
-- Compara `VERSION` (arquivo) com `.version` (local)
-- Mostra box amarelo se desatualizado
-- Mostra box verde se atualizado
-- Executa SEMPRE no startup
-
-#### `atualizar_ferramenta()` e `incrementar_versao()`
-- Executa `git pull`
-- Compila com `cargo build --release`
-- Incrementa versão semântica
-- Guarda em `.version` e `VERSION`
-
-#### `processar_argumentos()`
-- Extrai flags `-l` e `-o`
-- Define valores padrão
-- Retorna tupla (entrada, saída)
-
-#### `filtrar_urls()`
-- **Função core** do projeto
-- Lê arquivo de entrada
-- Processa cada URL:
-  - Extrai parâmetros
-  - Filtra extensões
-  - Quando `-status`: verifica HTTP
-  - Normaliza valores
-- **Novo**: Categoriza por status HTTP
-- Escreve resultado com `anew` (deduplicação)
-
-#### `verificar_status_http()` (Novo em v1.1.0)
-- Usa curl com timeout 5s
-- Retorna código HTTP
-- Categoriza: 2xx, 3xx, 4xx, 5xx
-- Integrado com `-status` flag
-
-#### `processar_domain_unico()`
-- Integração com ferramentas externas
-- **Novo**: Subfinder agora com `-all`
-- Executa: subfinder -d domain -all → katana → urlfinder
-- Agrega outputs
-
-#### `processar_lista_dominios()`
-- Processa múltiplos subdomínios
-- Chamadas em batch
-
-### 4. Módulo de I/O (Entrada/Saída)
-- **BufReader**: Leitura eficiente de arquivos
-- **BufWriter**: Escrita em buffer (performance)
-- **File**: Operações de sistema de arquivos
-- **anew**: Deduplicação de URLs
-
-### 5. Módulo de Formatação
-- **ANSI Colors**: Cores para terminal
-- **Banner**: Logo ASCII com versão
-- **Help**: Mensagem de ajuda formatada
-- **Boxes**: Formatação de mensagens (novo v1.1.0)
-
-## Fluxo de Dados - Modo Padrão (Modo -l)
-
-```
-urls.txt
-    ↓
-[Leitura com BufReader]
-    ↓
-Para cada linha:
-    ├─ Fazer parse (URL)
-    ├─ Extrair parâmetros (Query String)
-    ├─ Filtrar extensões
-    ├─ Normalizar (remover valores)
-    └─ Adicionar buffer de escrita
-    ↓
-[Escrita com BufWriter]
-    ↓
-resultado.txt
-```
-
-## Exemplos de Processamento
-
-### Entrada
-```
-https://example.com/page.html?id=123&user=admin
-https://api.example.com/search.php?q=test&p=1&format=json
-https://cdn.example.com/image.jpg
-```
-
-### Processamento
-
-| URL | Parâmetros | Filtro | Resultado |
-|----|-----------|--------|----------|
-| `page.html?id=123&user=admin` | `id=123&user=admin` | ❌ .html | ✓ Mantém |
-| `search.php?q=test&p=1&format=json` | `q=test&p=1&format=json` | ❌ .php | ✓ Mantém |
-| `image.jpg` | Nenhum | ✓ .jpg | ✗ Remove |
-
-### Saída
-```
-https://example.com/page.html?id=&user=
-https://api.example.com/search.php?q=&p=&format=
-```
-
-## Constantes Globais
-
-```rust
-// Cores ANSI para output colorido
-const RED: &str = "\x1b[91m";
-const GREEN: &str = "\x1b[92m";
-const YELLOW: &str = "\x1b[93m";
-// ... mais cores
-
-// Extensões a remover
-const EXTENSOES_REMOVER: &[&str] = &[
-    "md", "jpg", "jpeg", "gif", "css", ...
-];
-```
-
-## Padrões & Decisões de Design
-
-### 1. Sem Dependências Externas
-- ✅ Binário único e portável
-- ✅ Minimizar superfície de ataque
-- ✅ Builds reproduzíveis
-
-### 2. Performance
-- ✅ BufReader/BufWriter para I/O eficiente
-- ✅ Strings em heap apenas quando necessário
-- ✅ Release build otimizado
-
-### 3. Usabilidade
-- ✅ CLI intuitiva e simples
-- ✅ Mensagens de erro claras
-- ✅ Feedback visual com cores
-
-### 4. Manutenibilidade
-- ✅ Código bem documentado
-- ✅ Funções focadas em uma tarefa
-- ✅ Tratamento de erros robusto
-
-## Extensibilidade Futura
-
-### Pontos de Extensão
-
-1. **Novos Modos**
-   - Adicione nova função `processar_modo_x()`
-   - Adicione flag no match de argumentos
-
-2. **Novos Filtros**
-   - Modifique `EXTENSOES_REMOVER`
-   - Ou adicione novas regras em `filtrar_urls()`
-
-3. **Novos Formatos de Saída**
-   - Crie função `salvar_como_json()`
-   - Integre na lógica de processamento
-
-4. **Integração com Ferramentas**
-   - Use `Command::new()` para executar binários
-   - Parse dos outputs
-
-## Performance
-
-### Benchmark (Experimental)
-
-Com 10.000 URLs:
-- Debug build: ~500ms
-- Release build: ~50ms (10x mais rápido!)
-
-### Otimizações Implementadas
-
-- ✅ BufReader reduz syscalls de I/O
-- ✅ Regex compilada uma vez (não aplicada aqui, mas considerada)
-- ✅ String pre-alocada em buffer
-
-### Oportunidades Futuras
-
-- [ ] Rayon para processamento paralelo
-- [ ] Pool de threads para I/O bound operations
-- [ ] Cache LRU para resultados comuns
-- [ ] SIMD para parsing de URLs
-
-## Estrutura de Diretórios
-
-```
-ParamStrike/
-├── src/
-│   └── main.rs           # Toda a lógica (monolítho simples)
-├── target/
-│   ├── debug/            # Build debug
-│   └── release/          # Build otimizado
-├── Cargo.toml            # Configuração do projeto
-└── [Documentação]
-```
-
-### Por que um único arquivo?
-
-Para este projeto, um monolítho é apropriado porque:
-- Código é relativamente pequeno (<500 linhas)
-- Lógica é linear e sequencial
-- Sem lógica compartilhada complexa
-
-Quando crescer, refatore em módulos:
-- `lib.rs` - Core library
-- `main.rs` - CLI wrapper
-- `cli/`, `parser/`, `processor/` - Submódulos
-
----
-
-## Referências Internas
-
-- [main.rs](src/main.rs) - Implementação atual
-- [DEVELOPMENT.md](DEVELOPMENT.md) - Setup local
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Guia de contribuição
+## Pontos de extensão
+- Novos payloads de exploração → constantes `SQLI_PAYLOADS`, `XSS_PAYLOADS`, `IDOR_DELTAS`.
+- Novos filtros → `EXTENSOES_REMOVER` ou lógica em `filtrar_urls`.
+- Outro validador LLM → adaptar `validar_com_unsloth` para outro endpoint compatível.
+- Saídas extras → adicionar writer em `filtrar_urls` ou `salvar_relatorios`.

@@ -1,24 +1,22 @@
 # GitHub Topic Tags
 
-Para melhor descoberta do projeto, adicione os seguintes topics ao seu repositório GitHub:
-
+Sugestão de topics para melhorar a descoberta do projeto:
+- `paramstrike`
 - `url-extraction`
 - `parameter-extraction`
 - `penetration-testing`
 - `web-reconnaissance`
-- `security-tool`
+- `sql-injection`
+- `xss`
+- `idor`
 - `rust`
 - `cli`
-- `infosec`
+- `security-tool`
+- `llm`
+- `llama-server`
 
-## Como Adicionar Topics
-
-1. Vá para Settings do repositório
-2. Scroll até "About"
-3. Clique em "Add topics"
-4. Adicione os topics acima
-5. Salve
-
----
-
-Isso ajuda outros a descobrir o ParamStrike! 🔍
+Como adicionar:
+1. Acesse Settings ▸ About do repositório.
+2. Clique em “Add topics”.
+3. Inclua os tópicos acima.
+4. Salve.

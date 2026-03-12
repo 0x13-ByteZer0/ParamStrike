@@ -1,181 +1,121 @@
-﻿# ParamStrike
+# ParamStrike
 
-<div align="center">
+Uma ferramenta rápida em Rust para filtrar URLs, testar parâmetros (SQLi/XSS/IDOR) e validar achados com modelos locais via llama-server/Unsloth.
 
-![Rust](https://img.shields.io/badge/Rust-1.70%2B-orange?logo=rust&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-blue)
-![Version](https://img.shields.io/badge/Version-1.0.0-brightgreen)
-![Status](https://img.shields.io/badge/Status-Active-success)
+---
 
-**Uma ferramenta rápida para extração de parâmetros de URL e reconhecimento web**
-
-[Sobre](#sobre) • [Features](#features) • [Instalação](#instalação) • [Uso](#uso) • [Exemplos](#exemplos) • [Contribuir](#contribuir)
-
-</div>
+## Sumário
+Sobre • Features • Instalação • Uso • Exemplos • FAQ • Contribuir
 
 ---
 
 ## Sobre
-
-**ParamStrike** é uma ferramenta de linha de comando em Rust para extrair, filtrar e analisar parâmetros de URLs. Pensada para segurança ofensiva, pentest e recon:
-- 🎯 Filtro de URLs: extrai e normaliza parâmetros
-- 🔍 Domínio Único: roda subfinder, katana e urlfinder
-- 📑 Batch: processa múltiplos subdomínios a partir de arquivos
-- 🧹 Limpeza: remove extensões estáticas/irrelevantes automaticamente
-- 🧪 Exploração Ativa: testes básicos de SQLi e XSS (`-p/--explore`)
-- 🤖 Validação Local: checagem de achados via Ollama (`--ollama`)
-- 🎨 Saída Colorida: feedback visual em tempo real
+ParamStrike lê listas de URLs, remove ruído (extensões estáticas), verifica status HTTP, faz provas de conceito básicas de SQLi/XSS/IDOR e, opcionalmente, valida os achados com um LLM local exposto em modo OpenAI-compatible (llama-server/Unsloth). Há modos para um domínio, batch de subdomínios e coleta com pinchtab.
 
 ---
 
 ## Features
-
-- ⚡ Alta performance em Rust
-- 🔐 Sem dependências perigosas
-- 📊 Suporte a listas de URLs e domínios
-- 🎯 Filtros inteligentes (extensões + URLs sem parâmetros)
-- 🗄️ Saída configurável
-- 🌈 Colorização ANSI e modo verbose
-- ✅ Verificação de status HTTP (2xx, 3xx, 4xx, 5xx)
-- 🔁 Atualização guiada: `-up/--update`
-- 🧪 Exploração ativa (SQLi/XSS) com `-p/--explore`
-- 🤖 Validação de falsos positivos via Ollama (`--ollama`, `--ollama-model`)
+- ⚡ Paralelismo com Rayon (filtragem e exploração).
+- 🔍 Modos: arquivo (`-l`), domínio único (`-d` com subfinder/katana/urlfinder) e batch (`-f`).
+- 🧹 Filtro de extensões irrelevantes (imagens, mídia, fontes, binários, map etc).
+- ✅ Status HTTP categorizado (2xx/3xx/4xx/5xx/sem resposta).
+- 🧪 Exploração ativa: SQLi, XSS refletido, IDOR com deltas.
+- 🤖 Validação de achados via Unsloth/llama-server (`--unsloth`).
+- 🛠️ Bootstrap automático do modelo/servidor (`--unsloth-bootstrap`) com suporte a token HuggingFace (`--hf-token` ou `HF_TOKEN`).
+- 🗂️ Relatórios CSV de achados/falhas (`--report-prefix`).
+- 🌈 Saída colorida e barra de progresso (indicatif).
+- 🔁 Auto-update opcional (`-up`).
 
 ---
 
 ## Instalação
-
-### Pré-requisitos
+Pré-requisitos:
 - Rust 1.70+
 - Git
-- Ollama (opcional, apenas para validação LLM). Instale em https://ollama.com/ e rode `ollama pull phi3:mini`.
+- (Opcional) Python 3 + pip **ou** Windows para usar o bootstrap do llama-server
 
-### Clonar e compilar
+Passos:
 ```bash
 git clone https://github.com/0x13-ByteZer0/ParamStrike.git
 cd ParamStrike
 cargo build --release
 ```
-Binário em `target/release/paramstrike` (ou `.exe` no Windows).
+Binário: `target/release/paramstrike` (ou `.exe` no Windows).
+
+LLM opcional (bootstrap):
+- Tenha `python3` + `pip` no PATH (Linux/macOS) **ou** deixe o bootstrap baixar `llama-server.exe` (Windows).
+- Para modelos privados do HuggingFace, defina `HF_TOKEN` ou use `--hf-token <token>`.
 
 ---
 
-## Uso
-
-### Sintaxe
+## Uso rápido
+Sintaxe:
 ```bash
-paramstrike [OPÇÃO] [ARGUMENTOS]
+paramstrike [OPÇÕES]
 ```
 
-### Opções
-| Flag | Argumento | Descrição |
-|------|-----------|-----------|
-| `-l` | `<arquivo>` | Arquivo de entrada com URLs (modo padrão) |
-| `-o` | `<arquivo>` | Arquivo de saída (padrão: `urls_parametros.txt`) |
-| `-d` | `<domínio>` | Domínio único - executa subfinder, katana e urlfinder |
-| `-f` | `<arquivo>` | Arquivo com lista de subdomínios para crawler |
-| `-v, --verbose` | - | Modo verbose |
-| `-status` | - | Verifica status HTTP e salva por código |
-| `-p, --explore` | - | Exploração ativa (SQLi/XSS) |
-| `--ollama` | - | Valida achados via modelo local do Ollama |
-| `--ollama-model` | `<modelo>` | Define o modelo Ollama (padrão: `phi3:mini`) |
-| `-up, --update` | - | Atualiza a ferramenta do Git e recompila |
-| `-h, --help` | - | Mostra ajuda |
-
-### Modos
-- **Padrão**: `paramstrike -l urls.txt -o resultado.txt`
-- **Domínio único**: `paramstrike -d example.com`
-- **Batch**: `paramstrike -f subs.txt`
-
-### Exploração ativa e validação com LLM
-- Ative testes SQLi/XSS: `-p/--explore`
-- Valide achados localmente: `--ollama --ollama-model phi3:mini`
+Principais flags:
+| Flag | Descrição |
+| --- | --- |
+| `-l <arquivo>` | Arquivo de entrada com URLs (modo padrão) |
+| `-o <arquivo>` | Saída (padrão: `urls_parametros.txt`) |
+| `-d <domínio>` | Domínio único (subfinder + katana + urlfinder) |
+| `-f <arquivo>` | Lista de subdomínios (batch) |
+| `-v/--verbose` | Verbose |
+| `-status` | Checa status HTTP e separa por código |
+| `-p/--explore` | Testes SQLi/XSS/IDOR |
+| `--unsloth` | Valida achados com LLM (OpenAI-compatible) |
+| `--unsloth-model <m>` | Alias/modelo no llama-server (padrão `unsloth/Qwen3.5-8B-Instruct-GGUF`) |
+| `--unsloth-host <url>` | Host do servidor (padrão `http://127.0.0.1:8001`) |
+| `--unsloth-bootstrap` | Baixa o modelo recomendado e sobe o servidor local |
+| `--hf-token <t>` | Token HuggingFace (ou use env `HF_TOKEN`) |
+| `--report-prefix <p>` | Gera `<p>_achados.csv` e `<p>_falhas.csv` |
+| `--pinchtab-start <url>` | Seed inicial para coleta com pinchtab |
+| `--pinchtab-scope <dom>` / `--pinchtab-scope-file <arq>` | Restringe seeds pinchtab |
+| `-up/--update` | Atualiza via git pull + cargo build |
 
 ---
 
 ## Exemplos
-
-1. Filtrar URLs
+Filtrar URLs:
 ```bash
 paramstrike -l urls.txt -o parametros.txt
 ```
-2. Verificar status HTTP + verbose
+Status + verbose:
 ```bash
-paramstrike -l urls.txt -o parametros.txt -status -v
+paramstrike -l urls.txt -status -v
 ```
-3. Exploração ativa (SQLi/XSS)
+Explorar (SQLi/XSS/IDOR) e validar com LLM bootstrap:
 ```bash
-paramstrike -l urls.txt -o parametros.txt -p
+paramstrike -l urls.txt -p --unsloth --unsloth-bootstrap --report-prefix rel
 ```
-4. Exploração + validação no Ollama
+Domínio único completo:
 ```bash
-paramstrike -l urls.txt -o parametros.txt -p --ollama --ollama-model phi3:mini
-```
-5. Atualizar a ferramenta
-```bash
-paramstrike -up
+paramstrike -d example.com -p --unsloth
 ```
 
 ---
 
-## Extensões filtradas
-A ferramenta remove automaticamente URLs com extensões como: jpg, png, gif, css, js, json, pdf, docx, ttf, woff, mp4, exe, map (veja `EXTENSOES_REMOVER` em `src/main.rs`).
-
----
-
-## Estrutura do projeto
-```
-ParamStrike/
-├── Cargo.toml
-├── src/
-│   └── main.rs
-├── README.md
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-└── LICENSE
-```
+## FAQ (resumo)
+- **Deu 401 ao baixar o modelo?** Use `HF_TOKEN=<token>` ou `--hf-token <token>`. Alguns repositórios do HuggingFace exigem autenticação.
+- **Preciso do llama-server já rodando?** Não, `--unsloth-bootstrap` sobe um servidor local (python -m llama_cpp.server em Linux/macOS; binário em Windows).
+- **E se o binário `anew` não estiver instalado?** A ferramenta faz fallback para escrita e deduplicação em Rust.
+- **Quais extensões são filtradas?** Ver `EXTENSOES_REMOVER` em `src/main.rs` (imagens, docs, mídia, fontes, mapas, binários etc).
 
 ---
 
 ## Contribuir
-Contribuições são bem-vindas! Abra issues ou PRs. Passos rápidos:
-1. Fork → clone
-2. `git checkout -b feature/minha-feature`
-3. `cargo fmt && cargo clippy` (se aplicável)
-4. Abra o PR
-
----
-
-## Roadmap
-- Suporte a mais ferramentas de recon
-- Exportação JSON/CSV
-- Integração com Burp Suite
-- Análise avançada de parâmetros
-- Dashboard web (futuro)
+PRs são bem-vindos! Passos rápidos:
+1) Fork + branch (`feature/…` ou `fix/…`)  
+2) `cargo fmt && cargo clippy && cargo test`  
+3) Abra o PR com breve descrição.
 
 ---
 
 ## Licença
-MIT (veja [LICENSE](LICENSE)).
+MIT. Veja `LICENSE`.
 
 ---
 
-## Créditos
-Desenvolvido por [0x13-ByteZer0](https://github.com/0x13-ByteZer0).
-
----
-
-## Disclaimer
-⚠️ Uso apenas com permissão explícita. Ferramenta para fins educacionais e de pesquisa autorizada.
-
----
-
-## Suporte
-- Abra uma [Issue](https://github.com/0x13-ByteZer0/ParamStrike/issues)
-- Participe das [Discussões](https://github.com/0x13-ByteZer0/ParamStrike/discussions)
-
-<div align="center">
-
-**[↑ Voltar ao Topo](#paramstrike)**
-
-</div>
+## Aviso
+Use apenas com autorização explícita. Pentest não autorizado é ilegal.***
