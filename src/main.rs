@@ -774,7 +774,7 @@ fn registrar(achados: &Arc<Mutex<Vec<Achado>>>, pb: &Arc<ProgressBar>,
 
 fn gerar_payloads_com_llm(modelo: &str, host: &str, achados: &mut [Achado], verbose: bool) -> std::io::Result<()> {
     println!("{}[LLM] Gerando payloads customizados...{}", CYAN, RESET);
-    let client = Client::builder().timeout(Duration::from_secs(120)).build()
+    let client = Client::builder().timeout(Duration::from_secs(300)).build()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     let ep = format!("{}/v1/chat/completions", host.trim_end_matches('/'));
 
@@ -816,7 +816,7 @@ Responda SOMENTE com JSON array de strings.",
 
 fn validar_com_unsloth(modelo: &str, host: &str, achados: &mut [Achado], verbose: bool) -> std::io::Result<()> {
     println!("{}[LLM] Validando {} achados ({} @ {})...{}", CYAN, achados.len(), modelo, host, RESET);
-    let client = Client::builder().timeout(Duration::from_secs(120)).build()
+    let client = Client::builder().timeout(Duration::from_secs(300)).build()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     let ep = format!("{}/v1/chat/completions", host.trim_end_matches('/'));
     let sistema = "Especialista em pentest/bug bounty. Classifique achados de vulnerabilidades web. Seja técnico, objetivo. Responda em português.";
